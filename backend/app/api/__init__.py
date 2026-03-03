@@ -1,0 +1,9 @@
+from .auth import router as auth_router
+from .users import router as users_router
+from .submissions import router as submissions_router
+from .comments import router as comments_router
+from .files import router as files_router
+from .notifications import router as notifications_router
+from .projects import router as projects_router
+from .invites import router as invites_router
+from .settings import router as settings_router
