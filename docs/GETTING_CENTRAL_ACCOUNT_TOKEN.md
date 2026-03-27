@@ -38,7 +38,7 @@ After authorization, the playground will show tokens in "Step 2":
 ### Step 6: Copy the Refresh Token
 Copy the **Refresh Token** value (it looks like):
 ```
-1//0au0-VLysDhDcgYiAAA6AQnwf-l3Irpa0X5ev2C7u6EIceag8cFqDD2ilwaqt3x4ex3cmSCxWNtE2v_EFXu5fw_xXA
+1//example-refresh-token-value
 ```
 
 ### Step 7: Update .env File
@@ -49,7 +49,7 @@ GOOGLE_PERSONAL_ACCOUNT_TOKEN=<paste-refresh-token-here>
 
 Example:
 ```
-GOOGLE_PERSONAL_ACCOUNT_TOKEN=1//0au0-VLysDhDcgYiAAA6AQnwf-l3Irpa0X5ev2C7u6EIceag8cFqDD2ilwaqt3x4ex3cmSCxWNtE2v_EFXu5fw_xXA
+GOOGLE_PERSONAL_ACCOUNT_TOKEN=1//example-refresh-token-value
 ```
 
 ### Step 8: Restart Backend
