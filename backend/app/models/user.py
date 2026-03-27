@@ -8,7 +8,10 @@ from enum import Enum
 from typing import Optional, List
 
 from beanie import Document, Indexed
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+from app.core.time import utc_now
+from app.models.admin_access import AdminAccessScope
 
 
 class UserRole(str, Enum):
@@ -49,9 +52,9 @@ class User(Document, UserBase):
     is_active: bool = True
     
     # Timestamps
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
-    last_login: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    last_login: datetime = Field(default_factory=utc_now)
     
     # Stats (denormalized for quick access)
     total_hours: float = 0.0
@@ -72,8 +75,8 @@ class User(Document, UserBase):
         name = "users"
         use_state_management = True
     
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "email": "volunteer@example.com",
                 "google_id": "123456789",
@@ -84,7 +87,7 @@ class User(Document, UserBase):
                 "is_active": True,
             }
         }
-
+    )
 
 class UserCreate(BaseModel):
     """Schema for creating a new user (from Google OAuth)."""
@@ -113,6 +116,16 @@ class SetNameRequest(BaseModel):
     full_name: str
 
 
+class AdminAccessSummary(BaseModel):
+    """Aggregated delegated admin access summary for the current user."""
+    can_access_portal: bool = False
+    is_delegated: bool = False
+    scopes: List[AdminAccessScope] = Field(default_factory=list)
+    grant_id: Optional[str] = None
+    granted_by_email: Optional[EmailStr] = None
+    expires_at: Optional[datetime] = None
+
+
 class UserResponse(BaseModel):
     """Schema for user response (public data)."""
     id: str
@@ -127,8 +140,8 @@ class UserResponse(BaseModel):
     submission_streak: int = 0
     profile_complete: bool = False
     file_access_expires: Optional[datetime] = None
+    admin_access: AdminAccessSummary = Field(default_factory=AdminAccessSummary)
     created_at: datetime
     last_login: datetime
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

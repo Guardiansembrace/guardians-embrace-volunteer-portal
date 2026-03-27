@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../lib/AuthContext';
+import { useAuth } from '../lib/useAuth';
 import { Button, LoadingSpinner } from '../components/ui';
+import { Logo } from '../components/Logo';
 
 export default function SetNamePage() {
     const navigate = useNavigate();
@@ -81,7 +82,9 @@ export default function SetNamePage() {
                 textAlign: 'center',
             }}>
                 {/* Icon */}
-                <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🛡️</div>
+                <div style={{ marginBottom: '1rem' }}>
+                    <Logo size={80} style={{ filter: 'drop-shadow(0 4px 8px rgba(0,0,0,0.1))' }} />
+                </div>
 
                 {/* Heading */}
                 <h1 style={{

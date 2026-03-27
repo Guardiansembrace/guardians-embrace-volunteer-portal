@@ -3,6 +3,26 @@ import { api } from '../lib/api';
 import type { UploadedFile } from '../lib/api';
 import { Upload, X, FileText, Check, AlertCircle, ExternalLink } from 'lucide-react';
 
+const BLOCKED_UPLOAD_EXTENSIONS = new Set([
+    'app',
+    'bat',
+    'cmd',
+    'com',
+    'cpl',
+    'exe',
+    'hta',
+    'jar',
+    'js',
+    'lnk',
+    'msi',
+    'ps1',
+    'scr',
+    'sh',
+    'vb',
+    'vbe',
+    'vbs',
+]);
+
 interface FileUploadProps {
     weekId?: string;
     onFileUploaded?: (file: UploadedFile) => void;
@@ -69,9 +89,29 @@ export function FileUpload({ weekId, onFileUploaded, maxFiles = 10 }: FileUpload
     const uploadFiles = async (newFiles: File[]) => {
         await checkDriveStatus();
 
+        const rejectedFiles: UploadingFile[] = newFiles
+            .filter((file) => {
+                const extension = file.name.includes('.') ? file.name.split('.').pop()?.toLowerCase() : '';
+                return Boolean(extension && BLOCKED_UPLOAD_EXTENSIONS.has(extension));
+            })
+            .map((file) => ({
+                file,
+                status: 'error' as const,
+                error: 'Executable and script files are blocked. Upload documents, images, spreadsheets, or PDFs instead.',
+            }));
+
+        if (rejectedFiles.length > 0) {
+            setFiles((prev) => [...prev, ...rejectedFiles]);
+        }
+
         // Limit number of files
         const remainingSlots = maxFiles - files.filter(f => f.status === 'success').length;
-        const filesToUpload = newFiles.slice(0, remainingSlots);
+        const filesToUpload = newFiles
+            .filter((file) => {
+                const extension = file.name.includes('.') ? file.name.split('.').pop()?.toLowerCase() : '';
+                return !extension || !BLOCKED_UPLOAD_EXTENSIONS.has(extension);
+            })
+            .slice(0, remainingSlots);
 
         // Add files to state with pending status
         const uploadingFiles: UploadingFile[] = filesToUpload.map(file => ({
@@ -162,6 +202,9 @@ export function FileUpload({ weekId, onFileUploaded, maxFiles = 10 }: FileUpload
                     </p>
                     <p style={{ margin: '0.5rem 0 0', fontSize: '0.875rem', color: 'var(--color-text-muted)' }}>
                         {getStorageText()}
+                    </p>
+                    <p style={{ margin: '0.35rem 0 0', fontSize: '0.8rem', color: 'var(--color-text-muted)' }}>
+                        Max 25 MB per file. Executable and script files are blocked.
                     </p>
                 </label>
             </div>

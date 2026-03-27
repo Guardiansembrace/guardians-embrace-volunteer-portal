@@ -15,17 +15,22 @@ Endpoints:
 """
 
 from typing import List, Optional
-from datetime import datetime
 import traceback
 import logging
+import os
+from pathlib import Path
+import shutil
+import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, status, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+from app.core.rate_limit import rate_limit_by_user
 from app.core.security import get_current_user
 from app.core.drive import get_drive_service, upload_file_to_drive
 from app.core.storage import get_storage_service
+from app.core.time import utc_now
 from app.core.utils import get_week_id
 from app.models.user import User, UserRole
 from googleapiclient.errors import HttpError
@@ -36,6 +41,25 @@ router = APIRouter(prefix="/files", tags=["Files"])
 
 # Maximum upload size: 25 MB
 MAX_FILE_SIZE = 25 * 1024 * 1024
+BLOCKED_FILE_EXTENSIONS = {
+    ".app",
+    ".bat",
+    ".cmd",
+    ".com",
+    ".cpl",
+    ".exe",
+    ".hta",
+    ".js",
+    ".jar",
+    ".lnk",
+    ".msi",
+    ".ps1",
+    ".scr",
+    ".sh",
+    ".vb",
+    ".vbe",
+    ".vbs",
+}
 
 
 def _check_file_access(current_user: User):
@@ -47,7 +71,7 @@ def _check_file_access(current_user: User):
         return
     if (
         current_user.file_access_expires is not None
-        and datetime.utcnow() > current_user.file_access_expires
+        and utc_now() > current_user.file_access_expires
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -65,6 +89,12 @@ class UploadedFileResponse(BaseModel):
     drive_link: str
     uploaded_at: str
     storage_type: str = "local"
+
+
+class PublicFileResponse(BaseModel):
+    """Response for public file upload."""
+    url: str
+    filename: str
 
 
 class DriveStatusResponse(BaseModel):
@@ -122,7 +152,11 @@ async def test_drive_connection(current_user: User = Depends(get_current_user)):
 
 # ── Upload ──────────────────────────────────────────────────────────────
 
-@router.post("/upload", response_model=UploadedFileResponse)
+@router.post(
+    "/upload",
+    response_model=UploadedFileResponse,
+    dependencies=[Depends(rate_limit_by_user("file_upload_writes"))],
+)
 async def upload_file(
     file: UploadFile = File(...),
     week_id: str = Form(None),
@@ -158,7 +192,7 @@ async def upload_file(
             filename=result["filename"],
             mime_type=mime_type,
             drive_link=result["drive_link"],
-            uploaded_at=datetime.utcnow().isoformat(),
+            uploaded_at=utc_now().isoformat(),
             storage_type=result["storage_type"],
         )
     except Exception as e:
@@ -169,7 +203,11 @@ async def upload_file(
     return await _upload_local(file_data, file.filename, mime_type, target_week, current_user.name)
 
 
-@router.post("/upload-multiple", response_model=List[UploadedFileResponse])
+@router.post(
+    "/upload-multiple",
+    response_model=List[UploadedFileResponse],
+    dependencies=[Depends(rate_limit_by_user("file_upload_writes"))],
+)
 async def upload_multiple_files(
     files: List[UploadFile] = File(...),
     week_id: str = Form(None),
@@ -206,7 +244,7 @@ async def upload_multiple_files(
                         filename=result["filename"],
                         mime_type=mime_type,
                         drive_link=result["drive_link"],
-                        uploaded_at=datetime.utcnow().isoformat(),
+                        uploaded_at=utc_now().isoformat(),
                         storage_type=result["storage_type"],
                     )
                 )
@@ -335,29 +373,59 @@ async def download_file(
 
 # ── Delete ──────────────────────────────────────────────────────────────
 
-@router.delete("/{file_id}")
+@router.delete(
+    "/{file_id}",
+    dependencies=[Depends(rate_limit_by_user("file_upload_writes"))],
+)
 async def delete_file(
     file_id: str,
     current_user: User = Depends(get_current_user),
 ):
     """
-    Delete a file from Shared Drive.
-    Any authenticated user can delete (access control is by knowing the file ID).
-    Admins can delete any file.
+    Delete a file from Shared Drive or local storage.
+    - Admins and Team Leads can delete any file.
+    - Volunteers can only delete their own files (identified by name prefix in
+      local storage filenames; Drive deletions are restricted to ops staff).
     """
     _check_file_access(current_user)
+
+    is_ops = current_user.role in (UserRole.ADMIN, UserRole.TEAM_LEAD)
     drive = get_drive_service()
+
     if not drive:
-        # Try local storage
+        # Local storage: filename is "{week_id}_{volunteer_name}_{uuid}_{original}"
+        # Enforce ownership for non-ops users by checking the name prefix.
+        if not is_ops:
+            safe_name = (
+                "".join(c for c in current_user.name if c.isalnum() or c in (" ", "-", "_"))
+                .strip()
+                .replace(" ", "_")
+            )
+            # The stored filename contains the volunteer's sanitized name after the week_id segment
+            parts = file_id.split("_", 2)  # ["YYYY-WNN", "VolName", "rest…"]
+            if len(parts) < 2 or parts[1].lower() != safe_name.lower():
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Not authorized to delete this file.",
+                )
         storage = get_storage_service()
         if storage.delete_file(file_id):
+            logger.info("[FILES] File %s deleted by %s (%s)", file_id, current_user.name, current_user.email)
             return {"success": True, "message": "File deleted from local storage."}
         raise HTTPException(status_code=404, detail="File not found.")
+
+    # Shared Drive: no per-file ownership metadata is available without a DB
+    # record, so restrict Drive deletes to ops staff only.
+    if not is_ops:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins and team leads can delete files from the Shared Drive.",
+        )
 
     try:
         drive.delete_file(file_id)
         logger.info(
-            f"[FILES] File {file_id} deleted by {current_user.name} ({current_user.email})"
+            "[FILES] File %s deleted by %s (%s)", file_id, current_user.name, current_user.email
         )
         return {"success": True, "message": "File deleted from Shared Drive."}
     except HttpError as e:
@@ -399,6 +467,13 @@ async def get_submission_folder_link(
 
 async def _read_and_validate(file: UploadFile) -> bytes:
     """Read upload data and validate size."""
+    extension = Path(file.filename or "").suffix.lower()
+    if extension in BLOCKED_FILE_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Executable and script files are not allowed. Upload documents, images, spreadsheets, or PDFs instead.",
+        )
+
     try:
         data = await file.read()
     except Exception as e:
@@ -439,3 +514,49 @@ async def _upload_local(
         uploaded_at=result["uploaded_at"],
         storage_type="local",
     )
+
+
+@router.post(
+    "/public/upload",
+    response_model=PublicFileResponse,
+    dependencies=[Depends(rate_limit_by_user("file_upload_writes"))],
+)
+async def upload_public_image(
+    request: Request,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Upload a public image (e.g. for projects/banners).
+    Stores in 'static/uploads'.
+    """
+    # 1. Validate image
+    if not file.content_type.startswith("image/"):
+        raise HTTPException(400, "File must be an image.")
+
+    # 2. Generate filename
+    ext = os.path.splitext(file.filename)[1]
+    filename = f"{uuid.uuid4()}{ext}"
+    
+    # 3. Path
+    # app/api/files.py -> app/static/uploads
+    # __file__ is app/api/files.py
+    base_path = os.path.dirname(os.path.dirname(__file__)) # app
+    upload_dir = os.path.join(base_path, "static", "uploads")
+    os.makedirs(upload_dir, exist_ok=True)
+    file_path = os.path.join(upload_dir, filename)
+
+    # 4. Save
+    try:
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        logger.error(f"Failed to save public image: {e}")
+        raise HTTPException(500, "Failed to save file.")
+
+    # 5. Return URL
+    # request.base_url is usually http://localhost:8000/
+    # mounted at /static
+    url = f"{request.base_url}static/uploads/{filename}"
+    
+    return PublicFileResponse(url=url, filename=filename)

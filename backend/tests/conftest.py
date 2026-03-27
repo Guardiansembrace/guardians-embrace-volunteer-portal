@@ -4,9 +4,9 @@ Pytest configuration and fixtures for backend tests.
 
 import pytest
 import asyncio
-from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
+from app.core.time import utc_now
 from app.models.user import User, UserRole
 from app.models.submission import Submission, WorkEntry
 
@@ -30,8 +30,8 @@ def mock_user():
     user.is_active = True
     user.total_hours = 10.5
     user.total_submissions = 3
-    user.created_at = datetime.utcnow()
-    user.last_login = datetime.utcnow()
+    user.created_at = utc_now()
+    user.last_login = utc_now()
     return user
 
 
@@ -46,8 +46,8 @@ def mock_admin_user():
     user.is_active = True
     user.total_hours = 50.0
     user.total_submissions = 10
-    user.created_at = datetime.utcnow()
-    user.last_login = datetime.utcnow()
+    user.created_at = utc_now()
+    user.last_login = utc_now()
     return user
 
 
@@ -85,6 +85,6 @@ def mock_submission(mock_user, sample_work_entries):
     submission.future_work = []
     submission.total_hours = 5.5
     submission.status = "draft"
-    submission.created_at = datetime.utcnow()
-    submission.updated_at = datetime.utcnow()
+    submission.created_at = utc_now()
+    submission.updated_at = utc_now()
     return submission

@@ -8,7 +8,9 @@ from enum import Enum
 from typing import Optional, List
 
 from beanie import Document, Indexed, Link
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+
+from app.core.time import utc_now
 
 
 class SubmissionStatus(str, Enum):
@@ -38,6 +40,9 @@ class SubmissionBase(BaseModel):
     total_hours: float = 0.0
     blockers: Optional[str] = None
     notes: Optional[str] = None
+    
+    # Custom forms
+    custom_responses: dict = {}
     
     # Status
     status: SubmissionStatus = SubmissionStatus.DRAFT
@@ -80,8 +85,8 @@ class Submission(Document, SubmissionBase):
     admin_notes: Optional[str] = None
     
     # Timestamps
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
     submitted_at: Optional[datetime] = None
     
     class Settings:
@@ -91,8 +96,8 @@ class Submission(Document, SubmissionBase):
             [("user_id", 1), ("week_id", 1)],  # Compound index for user+week
         ]
     
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "user_id": "507f1f77bcf86cd799439011",
                 "user_email": "volunteer@example.com",
@@ -112,7 +117,7 @@ class Submission(Document, SubmissionBase):
                 "status": "submitted"
             }
         }
-
+    )
 
 class SubmissionCreate(BaseModel):
     """Schema for creating/updating a submission."""
@@ -122,6 +127,7 @@ class SubmissionCreate(BaseModel):
     blockers: Optional[str] = None
     notes: Optional[str] = None
     mood_rating: Optional[int] = None
+    custom_responses: dict = {}
 
 
 class SubmissionSubmit(BaseModel):
@@ -150,6 +156,7 @@ class SubmissionResponse(BaseModel):
     blockers: Optional[str]
     notes: Optional[str]
     mood_rating: Optional[int]
+    custom_responses: dict
     is_late: bool = False
     status: SubmissionStatus
     reviewed_by: Optional[str]
@@ -159,8 +166,7 @@ class SubmissionResponse(BaseModel):
     updated_at: datetime
     submitted_at: Optional[datetime]
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SubmissionSummary(BaseModel):
@@ -175,5 +181,4 @@ class SubmissionSummary(BaseModel):
     has_blockers: bool
     is_late: bool = False
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

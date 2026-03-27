@@ -20,6 +20,78 @@ export interface User {
     last_login: string;
     profile_complete: boolean;
     file_access_expires?: string;
+    admin_access: AdminAccessSummary;
+}
+
+export type AdminAccessScope =
+    | 'view_users'
+    | 'manage_users'
+    | 'review_submissions'
+    | 'send_reminders'
+    | 'manage_invites'
+    | 'manage_settings'
+    | 'view_audit_logs';
+
+export interface AdminAccessSummary {
+    can_access_portal: boolean;
+    is_delegated: boolean;
+    scopes: AdminAccessScope[];
+    grant_id?: string;
+    granted_by_email?: string;
+    expires_at?: string;
+}
+
+export interface AdminAccessGrant {
+    id: string;
+    user_id: string;
+    user_email: string;
+    user_name: string;
+    granted_by_user_id: string;
+    granted_by_email: string;
+    granted_by_name: string;
+    scopes: AdminAccessScope[];
+    note?: string;
+    expires_at?: string;
+    is_active: boolean;
+    created_at: string;
+    updated_at: string;
+    revoked_at?: string;
+    revoked_by_user_id?: string;
+    revoked_by_email?: string;
+}
+
+export interface AdminAccessGrantCreate {
+    user_id: string;
+    scopes: AdminAccessScope[];
+    note?: string | null;
+    expires_at?: string | null;
+}
+
+export interface AuditLogEntry {
+    id: string;
+    event_type: 'request' | 'security' | 'admin_access';
+    actor_user_id?: string;
+    actor_email?: string;
+    actor_name?: string;
+    actor_role?: string;
+    is_admin: boolean;
+    is_delegated: boolean;
+    delegated_grant_id?: string;
+    delegated_by_user_id?: string;
+    delegated_by_email?: string;
+    action: string;
+    resource_type: string;
+    resource_id?: string;
+    summary: string;
+    method?: string;
+    path?: string;
+    status_code?: number;
+    success: boolean;
+    request_id?: string;
+    ip_address?: string;
+    user_agent?: string;
+    metadata: Record<string, unknown>;
+    created_at: string;
 }
 
 export interface WorkEntry {
@@ -44,6 +116,7 @@ export interface Submission {
     blockers?: string;
     notes?: string;
     mood_rating?: number;
+    custom_responses?: Record<string, WorkEntry[]>;
     is_late?: boolean;
     status: 'draft' | 'submitted' | 'reviewed';
     reviewed_by?: string;
@@ -84,8 +157,10 @@ export interface WeekInfo {
     week_id: string;
     week_start: string;
     week_end: string;
+    submission_window_start: string;
     submission_deadline: string;
     is_submission_window_open: boolean;
+    allow_late_submissions: boolean;
     has_submission: boolean;
     submission_status?: string;
     submission_id?: string;
@@ -144,8 +219,172 @@ export interface FileInfo {
     created_time?: string;
 }
 
-class ApiClient {
+export interface FormSection {
+    id: string;
+    title: string;
+    subtitle?: string;
+    icon?: string;
+    type: string;
+    showHours: boolean;
+    required: boolean;
+    fields?: Array<Record<string, unknown>>;
+}
+
+export interface WeeklyUpdateSettings {
+    window_mode: 'always_open' | 'scheduled';
+    submissions_open_day: 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
+    submissions_open_hour: number;
+    submissions_open_minute: number;
+    deadline_day: 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
+    deadline_hour: number;
+    deadline_minute: number;
+    allow_late_submissions: boolean;
+    timezone: string;
+}
+
+export interface AdminSettings {
+    settings_id: string;
+    tags: string[];
+    active_projects: string[];
+    form_sections: FormSection[];
+    weekly_updates: WeeklyUpdateSettings;
+}
+
+const DEFAULT_WEEKLY_UPDATE_SETTINGS: WeeklyUpdateSettings = {
+    window_mode: 'always_open',
+    submissions_open_day: 'friday',
+    submissions_open_hour: 0,
+    submissions_open_minute: 0,
+    deadline_day: 'sunday',
+    deadline_hour: 23,
+    deadline_minute: 59,
+    allow_late_submissions: true,
+    timezone: 'America/New_York',
+};
+
+function normalizeWeekInfo(data: WeekInfo): WeekInfo {
+    return {
+        ...data,
+        submission_window_start: data.submission_window_start ?? data.week_start,
+        submission_deadline: data.submission_deadline ?? data.week_end,
+        is_submission_window_open: data.is_submission_window_open ?? true,
+        allow_late_submissions: data.allow_late_submissions ?? true,
+    };
+}
+
+function normalizeAdminSettings(data: AdminSettings): AdminSettings {
+    return {
+        ...data,
+        tags: data.tags ?? [],
+        active_projects: data.active_projects ?? [],
+        form_sections: data.form_sections ?? [],
+        weekly_updates: {
+            ...DEFAULT_WEEKLY_UPDATE_SETTINGS,
+            ...(data.weekly_updates ?? {}),
+        },
+    };
+}
+
+export interface ProjectUserSummary {
+    id: string;
+    email: string;
+    name: string;
+    picture?: string;
+    role: 'volunteer' | 'team_lead' | 'admin';
+    team?: string;
+}
+
+export interface Project {
+    id: string;
+    name: string;
+    description: string;
+    status: 'active' | 'completed' | 'on_hold' | 'planned';
+    tags?: string[];
+    banner_image?: string;
+    lead?: ProjectUserSummary;
+    members: ProjectUserSummary[];
+    created_at: string;
+    updated_at: string;
+}
+
+export interface ProjectCreate {
+    name: string;
+    description: string;
+    status?: 'active' | 'completed' | 'on_hold' | 'planned';
+    tags?: string[];
+    banner_image?: string;
+    lead_id?: string;
+    member_ids?: string[];
+}
+
+export interface ProjectWorkItem {
+    id: string;
+    project_id: string;
+    title: string;
+    description?: string;
+    item_type: string;
+    status: 'pending' | 'active' | 'blocked' | 'finished';
+    priority: 'low' | 'medium' | 'high' | 'urgent';
+    assignee_id?: string;
+    assignee_name?: string;
+    created_by_id: string;
+    created_by_name: string;
+    updated_by_id: string;
+    updated_by_name: string;
+    due_date?: string;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface ProjectWorkItemCreate {
+    title: string;
+    description?: string | null;
+    item_type: string;
+    status?: 'pending' | 'active' | 'blocked' | 'finished';
+    priority?: 'low' | 'medium' | 'high' | 'urgent';
+    assignee_id?: string | null;
+    due_date?: string | null;
+}
+
+export interface ProjectJoinRequest {
+    id: string;
+    project_id: string;
+    user_id: string;
+    user_email: string;
+    user_name: string;
+    message?: string;
+    status: 'pending' | 'approved' | 'declined';
+    requested_at: string;
+    reviewed_at?: string;
+    reviewed_by_id?: string;
+    reviewed_by_name?: string;
+}
+
+export interface ProjectJoinRequestCreate {
+    message?: string | null;
+}
+
+export interface AllowedEmail {
+    id: string;
+    email: string;
+    role: 'volunteer' | 'team_lead' | 'admin';
+    invited_by?: string;
+    created_at: string;
+}
+
+export interface InviteCreate {
+    email: string;
+    role: 'volunteer' | 'team_lead' | 'admin';
+}
+
+
+export class ApiClient {
     private token: string | null = null;
+    private readonly onUnauthorized: (path: string) => void;
+
+    constructor(onUnauthorized: (path: string) => void = (path) => window.location.assign(path)) {
+        this.onUnauthorized = onUnauthorized;
+    }
 
     setToken(token: string) {
         this.token = token;
@@ -161,6 +400,10 @@ class ApiClient {
     clearToken() {
         this.token = null;
         localStorage.removeItem('auth_token');
+    }
+
+    private redirectToLogin() {
+        this.onUnauthorized('/login');
     }
 
     private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
@@ -183,10 +426,14 @@ class ApiClient {
         if (!response.ok) {
             if (response.status === 401) {
                 this.clearToken();
-                window.location.href = '/login';
+                this.redirectToLogin();
             }
             const error = await response.json().catch(() => ({ detail: 'Request failed' }));
             throw new Error(error.detail || 'Request failed');
+        }
+
+        if (response.status === 204) {
+            return {} as T;
         }
 
         return response.json();
@@ -234,6 +481,7 @@ class ApiClient {
             active_users: number;
             inactive_users: number;
             volunteers: number;
+            team_leads: number;
             admins: number;
         }>('/users/stats/overview');
     }
@@ -250,9 +498,34 @@ class ApiClient {
         });
     }
 
+    // Invites
+    async getInvites(): Promise<AllowedEmail[]> {
+        return this.request<AllowedEmail[]>('/invites');
+    }
+
+    async inviteUser(data: InviteCreate): Promise<AllowedEmail> {
+        return this.request<AllowedEmail>('/invites', {
+            method: 'POST',
+            body: JSON.stringify(data),
+        });
+    }
+
+    async revokeInvite(email: string): Promise<void> {
+        return this.request<void>(`/invites/${email}`, {
+            method: 'DELETE',
+        });
+    }
+
+    async resendInvite(email: string): Promise<void> {
+        return this.request<void>(`/invites/${email}/resend`, {
+            method: 'POST',
+        });
+    }
+
     // Submissions
     async getCurrentWeekInfo(): Promise<WeekInfo> {
-        return this.request<WeekInfo>('/submissions/current-week');
+        const data = await this.request<WeekInfo>('/submissions/current-week');
+        return normalizeWeekInfo(data);
     }
 
     async getWorkCategories(): Promise<string[]> {
@@ -402,6 +675,27 @@ class ApiClient {
         return this.request<{ folder_link: string | null; week_id?: string }>(`/files/folder-link${queryParams}`);
     }
 
+    async uploadProjectImage(file: File): Promise<{ url: string; filename: string }> {
+        const token = this.getToken();
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const response = await fetch(`${API_URL}/files/public/upload`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+            },
+            body: formData,
+        });
+
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({ detail: 'Upload failed' }));
+            throw new Error(error.detail || 'Upload failed');
+        }
+
+        return response.json();
+    }
+
     // File listing
     async listFiles(params?: { week_id?: string; volunteer_name?: string }): Promise<FileInfo[]> {
         const queryParams = new URLSearchParams();
@@ -446,6 +740,151 @@ class ApiClient {
             method: 'POST',
         });
     }
+
+    // Projects
+    async getProjects(status?: string): Promise<Project[]> {
+        const qs = status ? `?status=${status}` : '';
+        return this.request<Project[]>(`/projects${qs}`);
+    }
+
+    async getProject(projectId: string): Promise<Project> {
+        return this.request<Project>(`/projects/${projectId}`);
+    }
+
+    async createProject(data: ProjectCreate): Promise<Project> {
+        return this.request<Project>('/projects', {
+            method: 'POST',
+            body: JSON.stringify(data),
+        });
+    }
+
+    async updateProject(projectId: string, data: Partial<ProjectCreate>): Promise<Project> {
+        return this.request<Project>(`/projects/${projectId}`, {
+            method: 'PATCH',
+            body: JSON.stringify(data),
+        });
+    }
+
+    async addProjectMember(projectId: string, userId: string): Promise<Project> {
+        return this.request<Project>(`/projects/${projectId}/members/${userId}`, {
+            method: 'POST',
+        });
+    }
+
+    async removeProjectMember(projectId: string, userId: string): Promise<Project> {
+        return this.request<Project>(`/projects/${projectId}/members/${userId}`, {
+            method: 'DELETE',
+        });
+    }
+
+    async deleteProject(projectId: string): Promise<void> {
+        return this.request<void>(`/projects/${projectId}`, {
+            method: 'DELETE',
+        });
+    }
+
+    async getProjectWorkItems(projectId: string): Promise<ProjectWorkItem[]> {
+        return this.request<ProjectWorkItem[]>(`/projects/${projectId}/work-items`);
+    }
+
+    async createProjectWorkItem(projectId: string, data: ProjectWorkItemCreate): Promise<ProjectWorkItem> {
+        return this.request<ProjectWorkItem>(`/projects/${projectId}/work-items`, {
+            method: 'POST',
+            body: JSON.stringify(data),
+        });
+    }
+
+    async updateProjectWorkItem(projectId: string, workItemId: string, data: Partial<ProjectWorkItemCreate>): Promise<ProjectWorkItem> {
+        return this.request<ProjectWorkItem>(`/projects/${projectId}/work-items/${workItemId}`, {
+            method: 'PATCH',
+            body: JSON.stringify(data),
+        });
+    }
+
+    async deleteProjectWorkItem(projectId: string, workItemId: string): Promise<void> {
+        return this.request<void>(`/projects/${projectId}/work-items/${workItemId}`, {
+            method: 'DELETE',
+        });
+    }
+
+    async getProjectJoinRequests(projectId: string): Promise<ProjectJoinRequest[]> {
+        return this.request<ProjectJoinRequest[]>(`/projects/${projectId}/join-requests`);
+    }
+
+    async requestProjectAccess(projectId: string, data: ProjectJoinRequestCreate): Promise<ProjectJoinRequest> {
+        return this.request<ProjectJoinRequest>(`/projects/${projectId}/join-requests`, {
+            method: 'POST',
+            body: JSON.stringify(data),
+        });
+    }
+
+    async reviewProjectJoinRequest(
+        projectId: string,
+        joinRequestId: string,
+        status: 'approved' | 'declined'
+    ): Promise<ProjectJoinRequest> {
+        return this.request<ProjectJoinRequest>(`/projects/${projectId}/join-requests/${joinRequestId}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ status }),
+        });
+    }
+
+    // Settings
+    async getSettings(): Promise<AdminSettings> {
+        const data = await this.request<AdminSettings>('/settings');
+        return normalizeAdminSettings(data);
+    }
+
+    async updateSettings(data: AdminSettings): Promise<{ success: boolean; settings: AdminSettings }> {
+        const response = await this.request<{ success: boolean; settings: AdminSettings }>('/settings', {
+            method: 'PUT',
+            body: JSON.stringify(data),
+        });
+        return {
+            ...response,
+            settings: normalizeAdminSettings(response.settings),
+        };
+    }
+
+    // Delegated admin access
+    async getAdminAccessGrants(): Promise<AdminAccessGrant[]> {
+        return this.request<AdminAccessGrant[]>('/admin-access/grants');
+    }
+
+    async createAdminAccessGrant(data: AdminAccessGrantCreate): Promise<AdminAccessGrant> {
+        return this.request<AdminAccessGrant>('/admin-access/grants', {
+            method: 'POST',
+            body: JSON.stringify(data),
+        });
+    }
+
+    async revokeAdminAccessGrant(grantId: string): Promise<void> {
+        return this.request<void>(`/admin-access/grants/${grantId}`, {
+            method: 'DELETE',
+        });
+    }
+
+    async getAuditLogs(params?: {
+        limit?: number;
+        actor_user_id?: string;
+        resource_type?: string;
+        event_type?: AuditLogEntry['event_type'];
+        success?: boolean;
+        action?: string;
+        is_delegated?: boolean;
+    }): Promise<AuditLogEntry[]> {
+        const queryParams = new URLSearchParams();
+        if (params?.limit !== undefined) queryParams.append('limit', String(params.limit));
+        if (params?.actor_user_id) queryParams.append('actor_user_id', params.actor_user_id);
+        if (params?.resource_type) queryParams.append('resource_type', params.resource_type);
+        if (params?.event_type) queryParams.append('event_type', params.event_type);
+        if (params?.success !== undefined) queryParams.append('success', String(params.success));
+        if (params?.action) queryParams.append('action', params.action);
+        if (params?.is_delegated !== undefined) queryParams.append('is_delegated', String(params.is_delegated));
+        const qs = queryParams.toString();
+        return this.request<AuditLogEntry[]>(`/admin-access/audit-logs${qs ? `?${qs}` : ''}`);
+    }
+
 }
 
 export const api = new ApiClient();

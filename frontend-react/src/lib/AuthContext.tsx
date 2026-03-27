@@ -1,12 +1,19 @@
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
+import { createContext, useState, useEffect, useCallback } from 'react';
+import type { ReactNode } from 'react';
 import { api } from './api';
-import type { User } from './api';
+import type { AdminAccessScope, User } from './api';
 
 interface AuthContextType {
     user: User | null;
     isLoading: boolean;
     isAuthenticated: boolean;
     isAdmin: boolean;
+    isTeamLead: boolean;
+    canManageOperations: boolean;
+    canAccessAdminPortal: boolean;
+    isDelegatedAdmin: boolean;
+    adminScopes: AdminAccessScope[];
+    hasAdminScope: (scope: AdminAccessScope) => boolean;
     needsName: boolean;
     login: (googleAccessToken: string) => Promise<void>;
     logout: () => void;
@@ -19,6 +26,14 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
     const [user, setUser] = useState<User | null>(null);
     const [isLoading, setIsLoading] = useState(true);
+
+    const adminScopes = user?.admin_access?.scopes ?? [];
+    const isAdmin = user?.role === 'admin';
+    const canAccessAdminPortal = isAdmin || Boolean(user?.admin_access?.can_access_portal);
+    const hasAdminScope = useCallback(
+        (scope: AdminAccessScope) => isAdmin || adminScopes.includes(scope),
+        [adminScopes, isAdmin],
+    );
 
     const refreshUser = useCallback(async () => {
         try {
@@ -35,6 +50,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
             const response = await api.loginWithGoogle(googleAccessToken);
             setUser(response.user);
+        } catch (err) {
+            setUser(null);
+            api.clearToken();
+            throw err;
         } finally {
             setIsLoading(false);
         }
@@ -63,7 +82,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user,
         isLoading,
         isAuthenticated: !!user,
-        isAdmin: user?.role === 'admin',
+        isAdmin,
+        isTeamLead: user?.role === 'team_lead',
+        canManageOperations: user?.role === 'admin' || user?.role === 'team_lead',
+        canAccessAdminPortal,
+        isDelegatedAdmin: Boolean(user?.admin_access?.is_delegated),
+        adminScopes,
+        hasAdminScope,
         needsName: !!user && !user.profile_complete,
         login,
         logout,
@@ -74,10 +99,4 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
-export function useAuth() {
-    const context = useContext(AuthContext);
-    if (context === undefined) {
-        throw new Error('useAuth must be used within an AuthProvider');
-    }
-    return context;
-}
+export { AuthContext };

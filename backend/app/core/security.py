@@ -2,7 +2,7 @@
 Security utilities: JWT tokens and Google OAuth verification.
 """
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional
 
 import httpx
@@ -11,6 +11,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 
 from app.core.config import get_settings
+from app.core.time import utc_now
 
 # Bearer token security scheme
 security = HTTPBearer(auto_error=False)
@@ -23,9 +24,9 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     to_encode = data.copy()
     
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = utc_now() + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=settings.jwt_expire_minutes)
+        expire = utc_now() + timedelta(minutes=settings.jwt_expire_minutes)
     
     to_encode.update({"exp": expire})
     
@@ -151,6 +152,29 @@ async def get_current_admin_user(user = Depends(get_current_user)):
     return user
 
 
+def has_operations_access(user) -> bool:
+    """
+    Return True when a user can handle operational management tasks.
+    Team leads can run the operations layer, but only admins keep full system control.
+    """
+    from app.models.user import UserRole
+
+    return user.role in (UserRole.ADMIN, UserRole.TEAM_LEAD)
+
+
+async def get_current_operations_user(user = Depends(get_current_user)):
+    """
+    Get the current user and ensure they can access operational management features.
+    """
+    if not has_operations_access(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Operations access required"
+        )
+
+    return user
+
+
 async def get_optional_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ):
@@ -165,3 +189,7 @@ async def get_optional_current_user(
         return await get_current_user(user_id)
     except HTTPException:
         return None
+
+# Alias for consistency
+get_current_admin = get_current_admin_user
+get_current_operations = get_current_operations_user

@@ -23,22 +23,45 @@ class Database:
         """Initialize the MongoDB connection and Beanie ODM."""
         settings = get_settings()
         
-        # Create Motor client
-        self.client = AsyncIOMotorClient(settings.mongodb_uri)
-        self.database = self.client[settings.mongodb_database]
+        if settings.use_mock_db:
+            from mongomock_motor import AsyncMongoMockClient
+            self.client = AsyncMongoMockClient()
+            self.database = self.client.get_database(settings.mongodb_database)
+            logger.info("Using mongomock_motor in-memory mock database")
+        else:
+            # Create Motor client
+            self.client = AsyncIOMotorClient(settings.mongodb_uri)
+            self.database = self.client[settings.mongodb_database]
+            logger.info("Connected to MongoDB: %s", settings.mongodb_database)
         
         # Import models here to avoid circular imports
         from app.models.user import User
         from app.models.submission import Submission
         from app.models.comment import Comment
+        from app.models.project import Project
+        from app.models.project_work_item import ProjectWorkItem
+        from app.models.project_join_request import ProjectJoinRequest
+        from app.models.admin_access import AdminAccessGrant
+        from app.models.audit_log import AuditLog
+        from app.models.allowed_email import AllowedEmail
+        from app.models.settings import AdminSettings
         
         # Initialize Beanie with all document models
         await init_beanie(
             database=self.database,
-            document_models=[User, Submission, Comment]
+            document_models=[
+                User,
+                Submission,
+                Comment,
+                Project,
+                ProjectWorkItem,
+                ProjectJoinRequest,
+                AdminAccessGrant,
+                AuditLog,
+                AllowedEmail,
+                AdminSettings,
+            ]
         )
-        
-        logger.info("Connected to MongoDB: %s", settings.mongodb_database)
     
     async def disconnect(self):
         """Close the MongoDB connection."""

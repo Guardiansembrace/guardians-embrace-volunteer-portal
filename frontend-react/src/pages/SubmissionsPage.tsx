@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { useAuth } from '../lib/AuthContext';
+import { useAuth } from '../lib/useAuth';
 import { api } from '../lib/api';
 import type { SubmissionSummary } from '../lib/api';
 import { Navbar, Footer } from '../components/Layout';
 import { Card, CardHeader, CardTitle, Button, Badge, LoadingSpinner, EmptyState } from '../components/ui';
-import { FileText, Plus, Calendar, Clock, AlertTriangle, Eye } from 'lucide-react';
+import { FileText, Plus, Calendar, AlertTriangle, Eye } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 
 export default function SubmissionsPage() {
@@ -50,37 +50,37 @@ export default function SubmissionsPage() {
     return (
         <div className="page-wrapper">
             <Navbar />
-            <main className="main-content">
+            <main id="main-content" className="main-content">
                 <div className="container">
-                    <div className="flex justify-between items-center" style={{ marginBottom: '2rem' }}>
+                    <div className="flex-between" style={{ marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
                         <div>
-                            <h1 style={{ marginBottom: '0.5rem' }}>My Submissions</h1>
-                            <p style={{ color: 'var(--color-text-muted)', margin: 0 }}>Your complete submission history</p>
+                            <h1 style={{ fontSize: '2rem', fontWeight: 800, margin: '0 0 0.5rem 0', color: 'var(--color-text-primary)' }}>My Submissions</h1>
+                            <p style={{ color: 'var(--color-text-muted)', margin: 0 }}>Review your reported hours and status.</p>
                         </div>
-                        <Link to="/submissions/new">
+                        <Link to="/submissions/new" style={{ textDecoration: 'none' }}>
                             <Button variant="primary">
-                                <Plus size={18} />
+                                <Plus size={18} style={{ marginRight: '0.5rem' }} />
                                 New Submission
                             </Button>
                         </Link>
                     </div>
 
-                    <div className="grid grid-cols-3" style={{ marginBottom: '2rem' }}>
-                        <div className="stat-card">
-                            <div className="stat-value">{submissions.length}</div>
-                            <div className="stat-label">Total Submissions</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem', marginBottom: '2rem' }}>
+                        <div className="card" style={{ padding: '1.25rem' }}>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.25rem' }}>Total Submissions</div>
+                            <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--color-text-primary)', lineHeight: 1 }}>{submissions.length}</div>
                         </div>
-                        <div className="stat-card">
-                            <div className="stat-value">{totalHours.toFixed(1)}h</div>
-                            <div className="stat-label">Total Hours</div>
+                        <div className="card" style={{ padding: '1.25rem' }}>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.25rem' }}>Total Hours</div>
+                            <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--color-text-primary)', lineHeight: 1 }}>{totalHours.toFixed(1)}<span style={{ fontSize: '1rem', color: 'var(--color-text-secondary)' }}>h</span></div>
                         </div>
-                        <div className="stat-card">
-                            <div className="stat-value">{submissions.filter(s => s.status !== 'draft').length}</div>
-                            <div className="stat-label">Submitted</div>
+                        <div className="card" style={{ padding: '1.25rem' }}>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.25rem' }}>Submitted</div>
+                            <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--color-text-primary)', lineHeight: 1 }}>{submissions.filter(s => s.status !== 'draft').length}</div>
                         </div>
                     </div>
 
-                    <Card>
+                    <Card style={{ marginBottom: '2rem' }}>
                         <CardHeader>
                             <CardTitle>Submission History</CardTitle>
                         </CardHeader>
@@ -90,14 +90,17 @@ export default function SubmissionsPage() {
                         ) : submissions.length > 0 ? (
                             <div className="table-wrapper">
                                 <table className="table">
+                                    <caption className="sr-only">
+                                        Your submission history with week, hours, status, blockers, submitted date, and a link to view each submission.
+                                    </caption>
                                     <thead>
                                         <tr>
-                                            <th><Calendar size={14} style={{ display: 'inline', marginRight: '0.5rem' }} />Week</th>
-                                            <th><Clock size={14} style={{ display: 'inline', marginRight: '0.5rem' }} />Hours</th>
-                                            <th>Status</th>
-                                            <th>Blockers</th>
-                                            <th>Submitted</th>
-                                            <th></th>
+                                            <th scope="col" style={{ display: 'flex', alignItems: 'center' }}><Calendar size={14} style={{ marginRight: '0.4rem' }} />Week</th>
+                                            <th scope="col">Hours</th>
+                                            <th scope="col">Status</th>
+                                            <th scope="col" className="hidden-mobile">Blockers</th>
+                                            <th scope="col" className="hidden-mobile">Submitted</th>
+                                            <th scope="col" style={{ textAlign: 'right' }}>Action</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -106,15 +109,15 @@ export default function SubmissionsPage() {
                                                 <td><strong style={{ color: 'var(--color-primary-gold)' }}>{sub.week_id}</strong></td>
                                                 <td>{sub.total_hours.toFixed(1)}h</td>
                                                 <td><Badge variant={sub.status as 'draft' | 'submitted' | 'reviewed'}>{sub.status}</Badge></td>
-                                                <td>
+                                                <td className="hidden-mobile">
                                                     {sub.has_blockers ? (
-                                                        <span className="flex items-center gap-1" style={{ color: 'var(--color-warning)' }}>
+                                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: '#b91c1c', fontSize: '0.85rem', fontWeight: 600, backgroundColor: '#fef2f2', padding: '0.2rem 0.5rem', borderRadius: '4px' }}>
                                                             <AlertTriangle size={14} /> Yes
                                                         </span>
-                                                    ) : '—'}
+                                                    ) : <span style={{ color: 'var(--color-text-muted)' }}>—</span>}
                                                 </td>
-                                                <td>{sub.submitted_at ? format(parseISO(sub.submitted_at), 'MMM d, yyyy') : '—'}</td>
-                                                <td>
+                                                <td className="hidden-mobile" style={{ color: 'var(--color-text-secondary)' }}>{sub.submitted_at ? format(parseISO(sub.submitted_at), 'MMM d, yyyy') : '—'}</td>
+                                                <td style={{ textAlign: 'right' }}>
                                                     <Link to={`/submissions/${sub.id}`}>
                                                         <Button variant="ghost" size="sm"><Eye size={16} /> View</Button>
                                                     </Link>

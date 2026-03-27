@@ -5,13 +5,16 @@ Handles user profile management and admin operations.
 
 import logging
 from typing import List, Optional
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.core.security import get_current_user, get_current_admin_user
+from app.core.admin_access import AdminAccessScope, build_user_response, require_admin_scopes
+from app.core.rate_limit import rate_limit_by_user
+from app.core.security import get_current_user
+from app.core.time import utc_now
 from app.models.user import User, UserRole, UserResponse, UserUpdate, UserAdminUpdate, SetNameRequest
 
 router = APIRouter(prefix="/users", tags=["Users"])
@@ -20,25 +23,14 @@ router = APIRouter(prefix="/users", tags=["Users"])
 @router.get("/me", response_model=UserResponse)
 async def get_current_user_profile(current_user: User = Depends(get_current_user)):
     """Get the current authenticated user's profile."""
-    return UserResponse(
-        id=str(current_user.id),
-        email=current_user.email,
-        name=current_user.name,
-        picture=current_user.picture,
-        role=current_user.role,
-        team=current_user.team,
-        is_active=current_user.is_active,
-        total_hours=current_user.total_hours,
-        total_submissions=current_user.total_submissions,
-        submission_streak=current_user.submission_streak,
-        profile_complete=current_user.profile_complete,
-        file_access_expires=current_user.file_access_expires,
-        created_at=current_user.created_at,
-        last_login=current_user.last_login,
-    )
+    return await build_user_response(current_user)
 
 
-@router.patch("/me", response_model=UserResponse)
+@router.patch(
+    "/me",
+    response_model=UserResponse,
+    dependencies=[Depends(rate_limit_by_user("user_profile_writes"))],
+)
 async def update_current_user_profile(
     update: UserUpdate,
     current_user: User = Depends(get_current_user)
@@ -51,25 +43,14 @@ async def update_current_user_profile(
     
     await current_user.save()
     
-    return UserResponse(
-        id=str(current_user.id),
-        email=current_user.email,
-        name=current_user.name,
-        picture=current_user.picture,
-        role=current_user.role,
-        team=current_user.team,
-        is_active=current_user.is_active,
-        total_hours=current_user.total_hours,
-        total_submissions=current_user.total_submissions,
-        submission_streak=current_user.submission_streak,
-        profile_complete=current_user.profile_complete,
-        file_access_expires=current_user.file_access_expires,
-        created_at=current_user.created_at,
-        last_login=current_user.last_login,
-    )
+    return await build_user_response(current_user)
 
 
-@router.post("/me/set-name", response_model=UserResponse)
+@router.post(
+    "/me/set-name",
+    response_model=UserResponse,
+    dependencies=[Depends(rate_limit_by_user("user_profile_writes"))],
+)
 async def set_full_name(
     body: SetNameRequest,
     current_user: User = Depends(get_current_user),
@@ -78,6 +59,12 @@ async def set_full_name(
     Set the user's full name after first Google OAuth login.
     Marks profile as complete. Can only be called once (rejects if already complete).
     """
+    if current_user.profile_complete:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Profile is already complete. Use PATCH /users/me to update your name.",
+        )
+
     name = body.full_name.strip()
     if len(name) < 2:
         raise HTTPException(
@@ -92,27 +79,12 @@ async def set_full_name(
 
     current_user.name = name
     current_user.profile_complete = True
-    current_user.updated_at = datetime.utcnow()
+    current_user.updated_at = utc_now()
     await current_user.save()
 
     logger.info("Profile completed for %s", current_user.email)
 
-    return UserResponse(
-        id=str(current_user.id),
-        email=current_user.email,
-        name=current_user.name,
-        picture=current_user.picture,
-        role=current_user.role,
-        team=current_user.team,
-        is_active=current_user.is_active,
-        total_hours=current_user.total_hours,
-        total_submissions=current_user.total_submissions,
-        submission_streak=current_user.submission_streak,
-        profile_complete=current_user.profile_complete,
-        file_access_expires=current_user.file_access_expires,
-        created_at=current_user.created_at,
-        last_login=current_user.last_login,
-    )
+    return await build_user_response(current_user)
 
 
 @router.get("", response_model=List[UserResponse])
@@ -122,10 +94,10 @@ async def list_all_users(
     is_active: Optional[bool] = Query(None, description="Filter by active status"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
-    current_user: User = Depends(get_current_admin_user)
+    current_user: User = Depends(require_admin_scopes(AdminAccessScope.VIEW_USERS, AdminAccessScope.MANAGE_USERS))
 ):
     """
-    List all users (admin only).
+    List all users for operational visibility.
     Supports filtering by role, team, and active status.
     """
     query = {}
@@ -138,34 +110,17 @@ async def list_all_users(
     
     users = await User.find(query).skip(skip).limit(limit).to_list()
     
-    return [
-        UserResponse(
-            id=str(u.id),
-            email=u.email,
-            name=u.name,
-            picture=u.picture,
-            role=u.role,
-            team=u.team,
-            is_active=u.is_active,
-            total_hours=u.total_hours,
-            total_submissions=u.total_submissions,
-            submission_streak=u.submission_streak,
-            created_at=u.created_at,
-            last_login=u.last_login,
-            profile_complete=u.profile_complete,
-            file_access_expires=u.file_access_expires,
-        )
-        for u in users
-    ]
+    return [await build_user_response(u) for u in users]
 
 
 @router.get("/stats/overview")
-async def get_user_stats(current_user: User = Depends(get_current_admin_user)):
-    """Get user statistics overview (admin only)."""
+async def get_user_stats(current_user: User = Depends(require_admin_scopes(AdminAccessScope.VIEW_USERS, AdminAccessScope.MANAGE_USERS))):
+    """Get user statistics overview for operations staff."""
     total_users = await User.count()
     active_users = await User.find(User.is_active == True).count()
     inactive_users = await User.find(User.is_active == False).count()
     volunteers = await User.find(User.role == UserRole.VOLUNTEER).count()
+    team_leads = await User.find(User.role == UserRole.TEAM_LEAD).count()
     admins = await User.find(User.role == UserRole.ADMIN).count()
     
     return {
@@ -173,6 +128,7 @@ async def get_user_stats(current_user: User = Depends(get_current_admin_user)):
         "active_users": active_users,
         "inactive_users": inactive_users,
         "volunteers": volunteers,
+        "team_leads": team_leads,
         "admins": admins,
     }
 
@@ -180,9 +136,9 @@ async def get_user_stats(current_user: User = Depends(get_current_admin_user)):
 @router.get("/{user_id}", response_model=UserResponse)
 async def get_user_by_id(
     user_id: str,
-    current_user: User = Depends(get_current_admin_user)
+    current_user: User = Depends(require_admin_scopes(AdminAccessScope.VIEW_USERS, AdminAccessScope.MANAGE_USERS))
 ):
-    """Get a specific user by ID (admin only)."""
+    """Get a specific user by ID for operations staff."""
     from bson import ObjectId
     
     try:
@@ -196,29 +152,18 @@ async def get_user_by_id(
             detail="User not found"
         )
     
-    return UserResponse(
-        id=str(user.id),
-        email=user.email,
-        name=user.name,
-        picture=user.picture,
-        role=user.role,
-        team=user.team,
-        is_active=user.is_active,
-        total_hours=user.total_hours,
-        total_submissions=user.total_submissions,
-        submission_streak=user.submission_streak,
-        created_at=user.created_at,
-        last_login=user.last_login,
-        profile_complete=user.profile_complete,
-        file_access_expires=user.file_access_expires,
-    )
+    return await build_user_response(user)
 
 
-@router.patch("/{user_id}", response_model=UserResponse)
+@router.patch(
+    "/{user_id}",
+    response_model=UserResponse,
+    dependencies=[Depends(rate_limit_by_user("user_admin_writes"))],
+)
 async def admin_update_user(
     user_id: str,
     update: UserAdminUpdate,
-    current_user: User = Depends(get_current_admin_user)
+    current_user: User = Depends(require_admin_scopes(AdminAccessScope.MANAGE_USERS))
 ):
     """Update a user's profile (admin only). Can change role and active status."""
     from bson import ObjectId
@@ -245,19 +190,4 @@ async def admin_update_user(
     
     await user.save()
     
-    return UserResponse(
-        id=str(user.id),
-        email=user.email,
-        name=user.name,
-        picture=user.picture,
-        role=user.role,
-        team=user.team,
-        is_active=user.is_active,
-        total_hours=user.total_hours,
-        total_submissions=user.total_submissions,
-        submission_streak=user.submission_streak,
-        created_at=user.created_at,
-        last_login=user.last_login,
-        profile_complete=user.profile_complete,
-        file_access_expires=user.file_access_expires,
-    )
+    return await build_user_response(user)

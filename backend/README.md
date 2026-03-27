@@ -11,10 +11,10 @@ venv\Scripts\activate           # Windows
 
 pip install -r requirements.txt
 cp .env.example .env            # fill in credentials
-python -m uvicorn app.main:app --reload --port 8000
+python -m uvicorn app.main:app --reload --port 8081
 ```
 
-API docs: `http://localhost:8000/api/docs`
+API docs: `http://localhost:8081/api/docs`
 
 ## Key Modules
 

@@ -8,11 +8,11 @@ import os
 import uuid
 
 logger = logging.getLogger(__name__)
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from app.core.config import get_settings
+from app.core.time import utc_now
 
 
 class LocalStorageService:
@@ -62,7 +62,7 @@ class LocalStorageService:
             'stored_filename': stored_filename,
             'mime_type': mime_type,
             'drive_link': f"/api/v1/files/download/{stored_filename}",
-            'uploaded_at': datetime.utcnow().isoformat()
+            'uploaded_at': utc_now().isoformat()
         }
     
     def get_file(self, stored_filename: str) -> Optional[tuple]:

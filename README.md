@@ -130,10 +130,10 @@ cp .env.example .env
 # Edit .env — fill in MongoDB URI, Google OAuth credentials, JWT secret, etc.
 
 # Run the server
-python -m uvicorn app.main:app --reload --port 8000
+python -m uvicorn app.main:app --reload --port 8081
 ```
 
-The API will be available at `http://localhost:8000` with interactive docs at `/api/docs`.
+The API will be available at `http://localhost:8081` with interactive docs at `/api/docs`.
 
 ### 3. Frontend Setup
 
@@ -175,6 +175,8 @@ The app will open at `http://localhost:5173`.
 | `ALLOWED_ORIGINS` | CORS origins (comma-separated) | `http://localhost:5173,http://localhost:3000` |
 | `ADMIN_EMAILS` | Admin email addresses (comma-separated) | `admin@guardiansembrace.org` |
 | `DEBUG` | Enable debug mode | `true` |
+| `HOST` | Backend bind host | `0.0.0.0` |
+| `PORT` | Backend bind port | `8081` |
 | `GOOGLE_DRIVE_SHARED_DRIVE_ID` | Shared Drive ID for file uploads | `0AHy...` |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to service account JSON | `service-account.json` |
 | `SMTP_HOST` | SMTP server hostname | `smtp.gmail.com` |
@@ -187,7 +189,9 @@ The app will open at `http://localhost:5173`.
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `VITE_API_URL` | Backend API base URL | `http://localhost:8000` |
+| `VITE_DEV_PORT` | Frontend dev server port | `5173` |
+| `VITE_API_PORT` | Backend API port used by the frontend | `8081` |
+| `VITE_API_URL` | Optional full backend API base URL override | `http://localhost:8081` |
 | `VITE_GOOGLE_CLIENT_ID` | Same Google OAuth client ID | `123456.apps.googleusercontent.com` |
 
 ---

@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useGoogleLogin } from '@react-oauth/google';
-import { useAuth } from '../lib/AuthContext';
+import { useAuth } from '../lib/useAuth';
 import { Button, LoadingSpinner } from '../components/ui';
+import { Logo } from '../components/Logo';
 import { Shield, Users, Clock, FileText } from 'lucide-react';
 
 export default function LoginPage() {
@@ -65,12 +66,8 @@ export default function LoginPage() {
                 justifyContent: 'center',
                 alignItems: 'center',
             }}>
-                <div style={{
-                    fontSize: '4rem',
-                    marginBottom: '1rem',
-                    filter: 'drop-shadow(0 4px 8px rgba(212, 175, 55, 0.3))',
-                }}>
-                    🛡️
+                <div style={{ marginBottom: '1rem' }}>
+                    <Logo size={100} style={{ filter: 'drop-shadow(0 4px 8px rgba(212, 175, 55, 0.3))' }} />
                 </div>
 
                 <h1 style={{

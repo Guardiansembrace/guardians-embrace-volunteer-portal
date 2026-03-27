@@ -4,7 +4,6 @@ Handles weekly volunteer submissions - create, update, submit, and review.
 """
 
 import logging
-from datetime import datetime
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
@@ -12,9 +11,22 @@ logger = logging.getLogger(__name__)
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from app.core.admin_access import AdminAccessScope, get_admin_access_context, require_admin_scopes
 from app.core.config import load_shared_config
-from app.core.security import get_current_user, get_current_admin_user
-from app.core.utils import get_week_id, get_week_boundaries, get_previous_week_id, is_submission_window_open, get_submission_deadline
+from app.core.rate_limit import rate_limit_by_user
+from app.core.security import get_current_user, has_operations_access
+from app.core.time import utc_now
+from app.core.utils import (
+    can_submit_for_week,
+    get_schedule_now,
+    get_submission_deadline,
+    get_submission_window_bounds,
+    get_previous_week_id,
+    get_week_boundaries,
+    get_week_id,
+    is_submission_window_open,
+)
+from app.core.weekly_updates import get_weekly_update_settings
 from app.models.user import User, UserRole
 from app.models.submission import (
     Submission,
@@ -56,6 +68,7 @@ def submission_to_response(s: Submission) -> SubmissionResponse:
         blockers=s.blockers,
         notes=s.notes,
         mood_rating=s.mood_rating,
+        custom_responses=s.custom_responses,
         is_late=s.is_late,
         status=s.status,
         reviewed_by=s.reviewed_by,
@@ -87,6 +100,8 @@ async def get_current_week_info(current_user: User = Depends(get_current_user)):
     """Get information about the current week and user's submission status."""
     week_id = get_week_id()
     week_start, week_end = get_week_boundaries(week_id)
+    window_start, submission_deadline = get_submission_window_bounds(week_id)
+    weekly_settings = get_weekly_update_settings()
     
     # Check if user has a submission for this week
     submission = await Submission.find_one(
@@ -98,8 +113,10 @@ async def get_current_week_info(current_user: User = Depends(get_current_user)):
         "week_id": week_id,
         "week_start": week_start.isoformat(),
         "week_end": week_end.isoformat(),
-        "submission_deadline": get_submission_deadline().isoformat(),
-        "is_submission_window_open": is_submission_window_open(),
+        "submission_window_start": window_start.isoformat(),
+        "submission_deadline": submission_deadline.isoformat(),
+        "is_submission_window_open": is_submission_window_open(week_id),
+        "allow_late_submissions": weekly_settings.allow_late_submissions,
         "has_submission": submission is not None,
         "submission_status": submission.status.value if submission else None,
         "submission_id": str(submission.id) if submission else None,
@@ -243,9 +260,9 @@ async def get_my_submissions(
 @router.get("/stats/overview")
 async def get_submissions_stats(
     week_id: Optional[str] = Query(None, description="Week ID to get stats for"),
-    current_user: User = Depends(get_current_admin_user)
+    current_user: User = Depends(require_admin_scopes(AdminAccessScope.REVIEW_SUBMISSIONS))
 ):
-    """Get submission statistics (admin only)."""
+    """Get submission statistics for operations staff."""
     from beanie.operators import In
     
     target_week = week_id or get_week_id()
@@ -290,7 +307,11 @@ async def get_submissions_stats(
     }
 
 
-@router.post("", response_model=SubmissionResponse)
+@router.post(
+    "",
+    response_model=SubmissionResponse,
+    dependencies=[Depends(rate_limit_by_user("submission_writes"))],
+)
 async def create_or_update_submission(
     data: SubmissionCreate,
     current_user: User = Depends(get_current_user)
@@ -301,6 +322,12 @@ async def create_or_update_submission(
     """
     week_id = get_week_id()
     week_start, week_end = get_week_boundaries(week_id)
+
+    if not can_submit_for_week(week_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="The submission window for this week is currently closed.",
+        )
     
     # Check for existing submission
     existing = await Submission.find_one(
@@ -312,6 +339,10 @@ async def create_or_update_submission(
         # Allow updating - if already submitted, revert to draft
         if existing.status != SubmissionStatus.DRAFT:
             logger.info("Reverting submitted entry to draft for %s", current_user.email)
+            # Undo the stat increment that was applied when first submitted
+            current_user.total_submissions = max(0, current_user.total_submissions - 1)
+            current_user.total_hours = max(0.0, current_user.total_hours - existing.total_hours)
+            await current_user.save()
             existing.status = SubmissionStatus.DRAFT
             existing.submitted_at = None
         
@@ -322,8 +353,9 @@ async def create_or_update_submission(
         existing.blockers = data.blockers
         existing.notes = data.notes
         existing.mood_rating = data.mood_rating
+        existing.custom_responses = data.custom_responses
         existing.total_hours = calculate_total_hours(data)
-        existing.updated_at = datetime.utcnow()
+        existing.updated_at = utc_now()
         
         await existing.save()
         return submission_to_response(existing)
@@ -342,10 +374,11 @@ async def create_or_update_submission(
         blockers=data.blockers,
         notes=data.notes,
         mood_rating=data.mood_rating,
+        custom_responses=data.custom_responses,
         total_hours=calculate_total_hours(data),
         status=SubmissionStatus.DRAFT,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=utc_now(),
+        updated_at=utc_now(),
     )
     
     await submission.insert()
@@ -357,10 +390,10 @@ async def list_all_submissions(
     week_id: Optional[str] = Query(None, description="Filter by week"),
     status_filter: Optional[SubmissionStatus] = Query(None, alias="status", description="Filter by status"),
     skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=100),
-    current_user: User = Depends(get_current_admin_user)
+    limit: int = Query(50, ge=1, le=200),
+    current_user: User = Depends(require_admin_scopes(AdminAccessScope.REVIEW_SUBMISSIONS))
 ):
-    """List all submissions (admin only)."""
+    """List all submissions for operational review."""
     query = {}
     if week_id:
         query["week_id"] = week_id
@@ -389,8 +422,9 @@ async def get_submission(
             detail="Submission not found"
         )
     
-    # Users can only view their own submissions unless admin
-    if str(current_user.id) != submission.user_id and current_user.role != UserRole.ADMIN:
+    # Users can only view their own submissions unless they have operations access
+    access = await get_admin_access_context(current_user)
+    if str(current_user.id) != submission.user_id and not access.has_any_scope(AdminAccessScope.REVIEW_SUBMISSIONS):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to view this submission"
@@ -399,7 +433,11 @@ async def get_submission(
     return submission_to_response(submission)
 
 
-@router.post("/{submission_id}/submit", response_model=SubmissionResponse)
+@router.post(
+    "/{submission_id}/submit",
+    response_model=SubmissionResponse,
+    dependencies=[Depends(rate_limit_by_user("submission_writes"))],
+)
 async def submit_submission(
     submission_id: str,
     current_user: User = Depends(get_current_user)
@@ -428,13 +466,19 @@ async def submit_submission(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Submission is not a draft"
         )
+
+    if not can_submit_for_week(submission.week_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="The submission window for this week is currently closed.",
+        )
     
     submission.status = SubmissionStatus.SUBMITTED
-    submission.submitted_at = datetime.utcnow()
-    submission.updated_at = datetime.utcnow()
+    submission.submitted_at = utc_now()
+    submission.updated_at = utc_now()
     
     # Check if submission is late (after week end)
-    submission.is_late = datetime.utcnow() > submission.week_end
+    submission.is_late = get_schedule_now() > get_submission_deadline(submission.week_id)
     
     await submission.save()
     
@@ -459,13 +503,17 @@ async def submit_submission(
     return submission_to_response(submission)
 
 
-@router.post("/{submission_id}/review", response_model=SubmissionResponse)
+@router.post(
+    "/{submission_id}/review",
+    response_model=SubmissionResponse,
+    dependencies=[Depends(rate_limit_by_user("submission_writes"))],
+)
 async def review_submission(
     submission_id: str,
     review: SubmissionAdminReview,
-    current_user: User = Depends(get_current_admin_user)
+    current_user: User = Depends(require_admin_scopes(AdminAccessScope.REVIEW_SUBMISSIONS))
 ):
-    """Mark a submission as reviewed (admin only)."""
+    """Mark a submission as reviewed (operations or admin)."""
     try:
         submission = await Submission.get(ObjectId(submission_id))
     except Exception:
@@ -485,9 +533,9 @@ async def review_submission(
     
     submission.status = SubmissionStatus.REVIEWED
     submission.reviewed_by = str(current_user.id)
-    submission.reviewed_at = datetime.utcnow()
+    submission.reviewed_at = utc_now()
     submission.admin_notes = review.admin_notes
-    submission.updated_at = datetime.utcnow()
+    submission.updated_at = utc_now()
     
     await submission.save()
     
