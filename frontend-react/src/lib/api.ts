@@ -13,11 +13,12 @@ export interface User {
     role: 'volunteer' | 'team_lead' | 'admin';
     team?: string;
     is_active: boolean;
+    invited_only?: boolean;
     total_hours: number;
     total_submissions: number;
     submission_streak: number;
     created_at: string;
-    last_login: string;
+    last_login: string | null;
     profile_complete: boolean;
     file_access_expires?: string;
     admin_access: AdminAccessSummary;
@@ -25,12 +26,18 @@ export interface User {
 
 export type AdminAccessScope =
     | 'view_users'
+    | 'edit_users'
+    | 'manage_user_status'
+    | 'manage_user_roles'
     | 'manage_users'
     | 'review_submissions'
     | 'send_reminders'
     | 'manage_invites'
+    | 'manage_projects'
     | 'manage_settings'
-    | 'view_audit_logs';
+    | 'view_audit_logs'
+    | 'view_admin_access'
+    | 'manage_admin_access';
 
 export interface AdminAccessSummary {
     can_access_portal: boolean;
@@ -210,6 +217,12 @@ export interface UploadedFile {
     storage_type?: string;
 }
 
+export interface PresignedUploadResponse extends UploadedFile {
+    upload_url: string;
+    method: string;
+    headers?: Record<string, string>;
+}
+
 export interface FileInfo {
     id: string;
     name: string;
@@ -292,6 +305,7 @@ export interface ProjectUserSummary {
     picture?: string;
     role: 'volunteer' | 'team_lead' | 'admin';
     team?: string;
+    invited_only?: boolean;
 }
 
 export interface Project {
@@ -618,12 +632,48 @@ export class ApiClient {
     }
 
     // Files / Google Drive
-    async getDriveStatus(): Promise<{ configured: boolean; message: string; storage_type: 'drive_org' | 'drive_personal' | 'local'; folder_name?: string }> {
-        return this.request<{ configured: boolean; message: string; storage_type: 'drive_org' | 'drive_personal' | 'local'; folder_name?: string }>('/files/drive-status');
+    async getDriveStatus(): Promise<{ configured: boolean; message: string; storage_type: 'shared_drive' | 's3' | 'local'; folder_name?: string }> {
+        return this.request<{ configured: boolean; message: string; storage_type: 'shared_drive' | 's3' | 'local'; folder_name?: string }>('/files/drive-status');
     }
 
     async uploadFile(file: File, weekId?: string): Promise<UploadedFile> {
         const token = this.getToken();
+        const status = await this.getDriveStatus();
+
+        if (status.storage_type === 's3') {
+            const uploadPlanResponse = await fetch(`${API_URL}/files/upload-url`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    filename: file.name,
+                    content_type: file.type || 'application/octet-stream',
+                    size: file.size,
+                    week_id: weekId,
+                }),
+            });
+
+            if (!uploadPlanResponse.ok) {
+                const error = await uploadPlanResponse.json().catch(() => ({ detail: 'Upload failed' }));
+                throw new Error(error.detail || 'Upload failed');
+            }
+
+            const uploadPlan = await uploadPlanResponse.json() as PresignedUploadResponse;
+            const uploadResponse = await fetch(uploadPlan.upload_url, {
+                method: uploadPlan.method || 'PUT',
+                headers: uploadPlan.headers ?? { 'Content-Type': file.type || 'application/octet-stream' },
+                body: file,
+            });
+
+            if (!uploadResponse.ok) {
+                throw new Error('Direct upload to S3 failed');
+            }
+
+            return uploadPlan;
+        }
+
         const formData = new FormData();
         formData.append('file', file);
         if (weekId) {
@@ -647,27 +697,11 @@ export class ApiClient {
     }
 
     async uploadMultipleFiles(files: File[], weekId?: string): Promise<UploadedFile[]> {
-        const token = this.getToken();
-        const formData = new FormData();
-        files.forEach(file => formData.append('files', file));
-        if (weekId) {
-            formData.append('week_id', weekId);
+        const uploads: UploadedFile[] = [];
+        for (const file of files) {
+            uploads.push(await this.uploadFile(file, weekId));
         }
-
-        const response = await fetch(`${API_URL}/files/upload-multiple`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-            },
-            body: formData,
-        });
-
-        if (!response.ok) {
-            const error = await response.json().catch(() => ({ detail: 'Upload failed' }));
-            throw new Error(error.detail || 'Upload failed');
-        }
-
-        return response.json();
+        return uploads;
     }
 
     async getFolderLink(weekId?: string): Promise<{ folder_link: string | null; week_id?: string }> {
@@ -694,6 +728,10 @@ export class ApiClient {
         }
 
         return response.json();
+    }
+
+    async getFileDownloadLink(fileId: string): Promise<{ url: string }> {
+        return this.request<{ url: string }>(`/files/download-link/${encodeURIComponent(fileId)}`);
     }
 
     // File listing

@@ -66,16 +66,17 @@ async def login_with_google(request: GoogleLoginRequest, http_request: Request):
                 detail="Could not retrieve user info from Google"
             )
         
+        settings = get_settings()
+        is_bootstrap_admin = settings.is_admin(email)
+        allowed_email_entry = await AllowedEmail.find_one(AllowedEmail.email == email)
+        
         # Check if user exists
         user = await User.find_one(User.email == email)
-        settings = get_settings()
+        was_invited_only = bool(user and user.invited_only)
         
         if user is None:
             # Check if this email is allowed (invited)
             # EXCEPTION: If is_admin(email) is true, allow it (bootstrap admin)
-            is_bootstrap_admin = settings.is_admin(email)
-            allowed_email_entry = await AllowedEmail.find_one(AllowedEmail.email == email)
-            
             if not is_bootstrap_admin and not allowed_email_entry:
                 logger.warning("Unauthorized login attempt: %s", email)
                 raise HTTPException(
@@ -103,6 +104,7 @@ async def login_with_google(request: GoogleLoginRequest, http_request: Request):
                 role=role,
                 is_active=True,
                 profile_complete=False,  # Must set full name first
+                invited_only=False,
                 file_access_expires=file_access_expires,
                 created_at=utc_now(),
                 updated_at=utc_now(),
@@ -112,11 +114,31 @@ async def login_with_google(request: GoogleLoginRequest, http_request: Request):
             await user.insert()
             logger.info("New user created: %s (role: %s)", email, role)
         else:
+            if user.invited_only and not is_bootstrap_admin and not allowed_email_entry:
+                logger.warning("Login blocked for revoked invite: %s", email)
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied. Your invitation is no longer active."
+                )
+
+            if not user.is_active and not user.invited_only:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Account is deactivated"
+                )
+
             # Update existing user
             user.last_login = utc_now()
+            user.name = name
             user.picture = picture  # Update profile picture in case it changed
             user.google_id = google_id  # Ensure google_id is set
             user.google_access_token = request.access_token  # Refresh token for Drive
+
+            if user.invited_only:
+                user.role = UserRole.ADMIN if is_bootstrap_admin else allowed_email_entry.role
+                user.file_access_expires = None if user.role in (UserRole.ADMIN, UserRole.TEAM_LEAD) else (utc_now() + timedelta(days=7))
+                user.invited_only = False
+                user.is_active = True
             
             # Check if this user should be promoted to admin
             if settings.is_admin(email) and user.role != UserRole.ADMIN:
@@ -145,7 +167,7 @@ async def login_with_google(request: GoogleLoginRequest, http_request: Request):
             resource_id=str(user.id),
             summary=f"{user.email} logged in with Google OAuth",
             status_code=status.HTTP_200_OK,
-            metadata={"is_new_user": user.created_at == user.last_login},
+            metadata={"is_new_user": user.created_at == user.last_login or was_invited_only},
         )
         
         return AuthResponse(

@@ -4,6 +4,7 @@ from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from app.core.admin_access import (
+    get_admin_access_context,
     get_current_admin_portal_user,
     normalize_admin_scopes,
     require_admin_scopes,
@@ -23,6 +24,17 @@ from app.models.user import User, UserRole
 router = APIRouter(prefix="/admin-access", tags=["Admin Access"])
 
 
+NON_ADMIN_RESTRICTED_GRANT_SCOPES = {
+    AdminAccessScope.MANAGE_ADMIN_ACCESS,
+    AdminAccessScope.MANAGE_USER_ROLES,
+    AdminAccessScope.MANAGE_USER_STATUS,
+}
+
+
+def _get_non_admin_grantable_scopes(current_scopes: List[AdminAccessScope]) -> set[AdminAccessScope]:
+    return set(normalize_admin_scopes(current_scopes)) - NON_ADMIN_RESTRICTED_GRANT_SCOPES
+
+
 def _grant_to_response(grant: AdminAccessGrant) -> AdminAccessGrantResponse:
     return AdminAccessGrantResponse(
         id=str(grant.id),
@@ -32,7 +44,7 @@ def _grant_to_response(grant: AdminAccessGrant) -> AdminAccessGrantResponse:
         granted_by_user_id=grant.granted_by_user_id,
         granted_by_email=grant.granted_by_email,
         granted_by_name=grant.granted_by_name,
-        scopes=grant.scopes,
+        scopes=normalize_admin_scopes(grant.scopes),
         note=grant.note,
         expires_at=grant.expires_at,
         is_active=grant.is_active,
@@ -45,7 +57,14 @@ def _grant_to_response(grant: AdminAccessGrant) -> AdminAccessGrantResponse:
 
 
 @router.get("/grants", response_model=List[AdminAccessGrantResponse])
-async def list_admin_access_grants(current_admin: User = Depends(require_admin_scopes())):
+async def list_admin_access_grants(
+    current_admin: User = Depends(
+        require_admin_scopes(
+            AdminAccessScope.VIEW_ADMIN_ACCESS,
+            AdminAccessScope.MANAGE_ADMIN_ACCESS,
+        )
+    )
+):
     grants = await AdminAccessGrant.find({"is_active": True}).sort("-updated_at").to_list()
     return [_grant_to_response(grant) for grant in grants]
 
@@ -59,13 +78,9 @@ async def list_admin_access_grants(current_admin: User = Depends(require_admin_s
 async def create_admin_access_grant(
     payload: AdminAccessGrantCreate,
     request: Request,
-    current_admin: User = Depends(require_admin_scopes()),
+    current_admin: User = Depends(require_admin_scopes(AdminAccessScope.MANAGE_ADMIN_ACCESS)),
 ):
-    if current_admin.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can grant delegated admin access",
-        )
+    access = await get_admin_access_context(current_admin)
 
     if payload.expires_at and payload.expires_at <= utc_now():
         raise HTTPException(
@@ -87,6 +102,25 @@ async def create_admin_access_grant(
 
     scopes = normalize_admin_scopes(payload.scopes)
     existing_grant = await AdminAccessGrant.find_one({"user_id": str(target_user.id), "is_active": True})
+
+    if not access.is_admin:
+        if str(target_user.id) == str(current_admin.id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You cannot modify your own delegated access grant",
+            )
+
+        grantable_scopes = _get_non_admin_grantable_scopes(access.scopes)
+        if not set(scopes).issubset(grantable_scopes):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only delegate the non-sensitive admin scopes you currently hold",
+            )
+        if existing_grant and not set(normalize_admin_scopes(existing_grant.scopes)).issubset(grantable_scopes):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You cannot modify a delegated grant that includes scopes outside your grant authority",
+            )
 
     action = "admin_access.grant_created"
     if existing_grant:
@@ -148,13 +182,9 @@ async def create_admin_access_grant(
 async def revoke_admin_access_grant(
     grant_id: str,
     request: Request,
-    current_admin: User = Depends(require_admin_scopes()),
+    current_admin: User = Depends(require_admin_scopes(AdminAccessScope.MANAGE_ADMIN_ACCESS)),
 ):
-    if current_admin.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can revoke delegated admin access",
-        )
+    access = await get_admin_access_context(current_admin)
 
     try:
         grant = await AdminAccessGrant.get(PydanticObjectId(grant_id))
@@ -166,6 +196,14 @@ async def revoke_admin_access_grant(
 
     if not grant.is_active:
         return None
+
+    if not access.is_admin:
+        grantable_scopes = _get_non_admin_grantable_scopes(access.scopes)
+        if not set(normalize_admin_scopes(grant.scopes)).issubset(grantable_scopes):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You cannot revoke a delegated grant that includes scopes outside your grant authority",
+            )
 
     grant.is_active = False
     grant.revoked_at = utc_now()

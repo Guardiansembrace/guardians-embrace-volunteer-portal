@@ -13,10 +13,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 def load_shared_config() -> dict:
     """Load shared configuration from the monorepo shared folder."""
-    config_path = Path(__file__).parent.parent.parent.parent / "shared" / "config.json"
-    if config_path.exists():
-        with open(config_path, "r") as f:
-            return json.load(f)
+    for parent in Path(__file__).resolve().parents:
+        config_path = parent / "shared" / "config.json"
+        if config_path.exists():
+            with open(config_path, "r", encoding="utf-8") as f:
+                return json.load(f)
     return {}
 
 
@@ -36,6 +37,7 @@ class Settings(BaseSettings):
     api_prefix: str = "/api/v1"
     monitoring_enabled: bool = True
     frontend_error_ingest_enabled: bool = True
+    log_to_file: bool = False
     
     # Server
     host: str = "0.0.0.0"
@@ -98,6 +100,12 @@ class Settings(BaseSettings):
 
     # Frontend URL (used in outgoing emails)
     frontend_url: str = "http://localhost:5173"
+    file_download_token_expire_minutes: int = 5
+
+    # AWS / S3
+    aws_region: str = "us-east-1"
+    aws_s3_bucket: str = ""
+    aws_public_assets_base_url: str = ""
 
     # SMTP Email (for reminders)
     smtp_host: str = "smtp.gmail.com"

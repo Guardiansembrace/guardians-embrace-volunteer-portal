@@ -255,7 +255,13 @@ export default function DashboardPage() {
     const recentSubmissions = submissions.slice(0, 4);
     const recentTeamSubmissions = allSubmissions.slice(0, 5);
     const hasSubmissionStatus = weekInfo?.has_submission && weekInfo.submission_status;
-    const hasUserAccess = hasAdminScope('view_users') || hasAdminScope('manage_users');
+    const canEditUsers = hasAdminScope('edit_users') || hasAdminScope('manage_users');
+    const canManageUserStatus = hasAdminScope('manage_user_status') || hasAdminScope('manage_users');
+    const canManageUserRoles = hasAdminScope('manage_user_roles');
+    const canViewUsers = hasAdminScope('view_users') || canEditUsers || canManageUserStatus || canManageUserRoles;
+    const canViewAdminAccess = hasAdminScope('view_admin_access') || hasAdminScope('manage_admin_access');
+    const canManageAdminAccess = hasAdminScope('manage_admin_access');
+    const hasUserAccess = canViewUsers || hasAdminScope('manage_invites') || canViewAdminAccess;
     const hasSubmissionAccess = hasAdminScope('review_submissions');
     const canSendReminders = hasAdminScope('send_reminders');
 
@@ -369,7 +375,15 @@ export default function DashboardPage() {
                                     <Link to="/admin/users">
                                         <Button variant="secondary">
                                             <Shield size={18} />
-                                            {hasAdminScope('manage_users') ? 'Manage users' : 'View users'}
+                                            {canManageAdminAccess
+                                                ? 'Manage access'
+                                                : (canEditUsers || canManageUserStatus || canManageUserRoles)
+                                                    ? 'Manage users'
+                                                    : hasAdminScope('manage_invites')
+                                                        ? 'Manage invites'
+                                                        : canViewAdminAccess
+                                                            ? 'View access'
+                                                            : 'View users'}
                                         </Button>
                                     </Link>
                                 )}

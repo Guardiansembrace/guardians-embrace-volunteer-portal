@@ -38,13 +38,14 @@ export default function ProjectsPage() {
     const [isUploading, setIsUploading] = useState(false);
 
     const [users, setUsers] = useState<User[]>([]);
+    const assignableUsers = users.filter((user) => user.is_active);
 
     useEffect(() => {
         const loadData = async () => {
             setIsLoading(true);
             try {
                 const projectsPromise = api.getProjects();
-                const usersPromise = canManageOperations ? api.getAllUsers() : Promise.resolve([]);
+                const usersPromise = canManageOperations ? api.getAllUsers({ is_active: true }) : Promise.resolve([]);
                 const [projectsData, usersData] = await Promise.all([projectsPromise, usersPromise]);
                 setProjects(projectsData);
                 setUsers(usersData);
@@ -62,7 +63,7 @@ export default function ProjectsPage() {
         setIsLoading(true);
         try {
             const projectsPromise = api.getProjects();
-            const usersPromise = canManageOperations ? api.getAllUsers() : Promise.resolve([]);
+            const usersPromise = canManageOperations ? api.getAllUsers({ is_active: true }) : Promise.resolve([]);
             const [projectsData, usersData] = await Promise.all([projectsPromise, usersPromise]);
             setProjects(projectsData);
             setUsers(usersData);
@@ -435,10 +436,15 @@ export default function ProjectsPage() {
                                         onChange={(e) => setProjectForm({ ...projectForm, lead_id: e.target.value || undefined })}
                                     >
                                         <option value="">Select a lead...</option>
-                                        {users.map(user => (
-                                            <option key={user.id} value={user.id}>{user.name} ({formatTagLabel(user.role || 'volunteer')})</option>
+                                        {assignableUsers.map(user => (
+                                            <option key={user.id} value={user.id}>
+                                                {user.name} ({formatTagLabel(user.role || 'volunteer')}{user.invited_only ? ' - Pending login' : ''})
+                                            </option>
                                         ))}
                                     </select>
+                                    <p style={{ fontSize: '0.75rem', color: '#6b7280', margin: '0.35rem 0 0' }}>
+                                        Invited teammates appear here right away and are marked until they complete their first login.
+                                    </p>
                                 </div>
 
                                 {/* Team Members */}
@@ -452,7 +458,7 @@ export default function ProjectsPage() {
                                         padding: '0.5rem',
                                         backgroundColor: '#f9fafb'
                                     }}>
-                                        {users.length > 0 ? users.map(user => (
+                                        {assignableUsers.length > 0 ? assignableUsers.map(user => (
                                             <div key={user.id} style={{ display: 'flex', alignItems: 'center', marginBottom: '0.5rem' }}>
                                                 <input
                                                     type="checkbox"
@@ -472,6 +478,11 @@ export default function ProjectsPage() {
                                                     <span style={{ color: '#8b1538', fontSize: '0.75rem', fontWeight: 600 }}>
                                                         {formatTagLabel(user.role || 'volunteer')}
                                                     </span>{' '}
+                                                    {user.invited_only && (
+                                                        <span style={{ color: '#b45309', fontSize: '0.75rem', fontWeight: 600 }}>
+                                                            Pending login
+                                                        </span>
+                                                    )}{' '}
                                                     <span style={{ color: '#6b7280', fontSize: '0.75rem' }}>({user.email})</span>
                                                 </label>
                                             </div>

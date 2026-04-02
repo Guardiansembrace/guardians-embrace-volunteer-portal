@@ -75,39 +75,51 @@ def can_view_project(_project: Project, _user: User) -> bool:
     return True
 
 
-def can_manage_project_work(project: Project, user: User) -> bool:
+def can_manage_project_work(project: Project, user: User, *, operations_override: bool = False) -> bool:
     """Project leads and operations users can manage work across the board."""
-    return has_operations_access(user) or is_project_lead(project, user)
+    return operations_override or has_operations_access(user) or is_project_lead(project, user)
 
 
-def can_contribute_to_project(project: Project, user: User) -> bool:
+def can_contribute_to_project(project: Project, user: User, *, operations_override: bool = False) -> bool:
     """Project members, leads, and operations users can create work items."""
-    return can_manage_project_work(project, user) or is_project_member(project, user)
+    return can_manage_project_work(project, user, operations_override=operations_override) or is_project_member(project, user)
 
 
-def can_assign_project_work(project: Project, user: User) -> bool:
+def can_assign_project_work(project: Project, user: User, *, operations_override: bool = False) -> bool:
     """Project contributors can assign work within the project roster."""
-    return can_contribute_to_project(project, user)
+    return can_contribute_to_project(project, user, operations_override=operations_override)
 
 
-def can_claim_project_work_item(project: Project, user: User) -> bool:
+def can_claim_project_work_item(project: Project, user: User, *, operations_override: bool = False) -> bool:
     """Project contributors can claim a work item for themselves."""
-    return can_contribute_to_project(project, user)
+    return can_contribute_to_project(project, user, operations_override=operations_override)
 
 
-def can_request_project_access(project: Project, user: User) -> bool:
+def can_request_project_access(project: Project, user: User, *, operations_override: bool = False) -> bool:
     """Users can request access when they can view but do not yet belong to the project."""
-    return not can_contribute_to_project(project, user)
+    return not can_contribute_to_project(project, user, operations_override=operations_override)
 
 
-def can_edit_project_work_item(project: Project, work_item: ProjectWorkItem, user: User) -> bool:
+def can_edit_project_work_item(
+    project: Project,
+    work_item: ProjectWorkItem,
+    user: User,
+    *,
+    operations_override: bool = False,
+) -> bool:
     """Assigned project members can edit their own work items; managers can edit any."""
-    if can_manage_project_work(project, user):
+    if can_manage_project_work(project, user, operations_override=operations_override):
         return True
 
     return is_project_team_member(project, user) and str(work_item.assignee_id or "") == str(user.id)
 
 
-def can_delete_project_work_item(project: Project, _work_item: ProjectWorkItem, user: User) -> bool:
+def can_delete_project_work_item(
+    project: Project,
+    _work_item: ProjectWorkItem,
+    user: User,
+    *,
+    operations_override: bool = False,
+) -> bool:
     """Only board managers can delete work items."""
-    return can_manage_project_work(project, user)
+    return can_manage_project_work(project, user, operations_override=operations_override)

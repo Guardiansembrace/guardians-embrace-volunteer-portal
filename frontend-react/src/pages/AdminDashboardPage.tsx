@@ -59,13 +59,19 @@ export default function AdminDashboardPage() {
     const [reminderResult, setReminderResult] = useState<string | null>(null);
     const [isSendingReminder, setIsSendingReminder] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
-    const canViewUsers = hasAdminScope('view_users') || hasAdminScope('manage_users');
-    const canManageUsers = hasAdminScope('manage_users');
+    const canEditUsers = hasAdminScope('edit_users') || hasAdminScope('manage_users');
+    const canManageUserStatus = hasAdminScope('manage_user_status') || hasAdminScope('manage_users');
+    const canManageUserRoles = hasAdminScope('manage_user_roles');
+    const canViewUsers = hasAdminScope('view_users') || canEditUsers || canManageUserStatus || canManageUserRoles;
+    const canManageUsers = canEditUsers || canManageUserStatus || canManageUserRoles;
     const canManageInvites = hasAdminScope('manage_invites');
     const canReviewSubmissions = hasAdminScope('review_submissions');
     const canSendReminders = hasAdminScope('send_reminders');
+    const canManageProjects = hasAdminScope('manage_projects');
     const canManageSettings = hasAdminScope('manage_settings');
     const canViewAuditLogs = hasAdminScope('view_audit_logs');
+    const canViewAdminAccess = hasAdminScope('view_admin_access') || hasAdminScope('manage_admin_access');
+    const canManageAdminAccess = hasAdminScope('manage_admin_access');
 
     useEffect(() => {
         if (!authLoading && (!isAuthenticated || !canAccessAdminPortal)) {
@@ -264,32 +270,48 @@ export default function AdminDashboardPage() {
                                         metaAction="Open Queue"
                                     />
                                 )}
-                                {(canViewUsers || canManageInvites) && (
+                                {(canViewUsers || canManageInvites || canViewAdminAccess) && (
                                     <ActionCard
                                         title="User Directory"
                                         description={
-                                            canManageUsers
-                                                ? 'Update roles, delegated access, invitations, and account status.'
+                                            canManageAdminAccess
+                                                ? 'Delegate admin responsibilities, review current grants, and coordinate invitations from one place.'
+                                                : canManageUsers
+                                                    ? 'Update user details, roles, and account status based on the permissions you were given.'
                                                 : canManageInvites
                                                     ? 'Manage invitations and delegated access handoffs from one place.'
-                                                    : 'View the user directory and delegated access snapshots.'
+                                                    : canViewAdminAccess
+                                                        ? 'Review who currently has delegated admin access and when those grants expire.'
+                                                        : 'View the user directory and delegated access snapshots.'
                                         }
                                         icon={<Users size={24} />}
                                         href="/admin/users"
-                                        metaAction={canManageUsers ? 'Manage Users' : canManageInvites ? 'Manage Invites' : 'View Directory'}
+                                        metaAction={
+                                            canManageAdminAccess
+                                                ? 'Manage Access'
+                                                : canManageUsers
+                                                    ? 'Manage Users'
+                                                    : canManageInvites
+                                                        ? 'Manage Invites'
+                                                        : canViewAdminAccess
+                                                            ? 'View Access'
+                                                            : 'View Directory'
+                                        }
                                     />
                                 )}
-                                <ActionCard
-                                    title="Active Projects"
-                                    description="Manage the public list of active missions, descriptions, and team assignments."
-                                    icon={<Briefcase size={24} />}
-                                    href="/projects"
-                                    metaAction="View Projects"
-                                />
+                                {canManageProjects && (
+                                    <ActionCard
+                                        title="Active Projects"
+                                        description="Manage project boards, team assignments, work items, and join requests."
+                                        icon={<Briefcase size={24} />}
+                                        href="/projects"
+                                        metaAction="Manage Projects"
+                                    />
+                                )}
                                 {canManageSettings && (
                                     <ActionCard
                                         title="System Settings"
-                                        description="Maintain global tags, dynamic form structural parameters, and email defaults."
+                                        description="Maintain submission forms, weekly schedule rules, global tags, and app settings."
                                         icon={<Settings size={24} />}
                                         href="/admin/settings"
                                         metaAction="Configure App"

@@ -4,6 +4,7 @@ from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.projects import _get_project_or_404
+from app.core.admin_access import AdminAccessScope, get_admin_access_context
 from app.core.project_access import (
     can_manage_project_work,
     can_request_project_access,
@@ -23,6 +24,11 @@ from app.models.project_join_request import (
 from app.models.user import User
 
 router = APIRouter(prefix="/projects", tags=["project-join-requests"])
+
+
+async def _has_project_management_access(current_user: User) -> bool:
+    access = await get_admin_access_context(current_user)
+    return access.has_any_scope(AdminAccessScope.MANAGE_PROJECTS)
 
 
 def _serialize_join_request(join_request: ProjectJoinRequest) -> ProjectJoinRequestResponse:
@@ -61,7 +67,8 @@ async def list_project_join_requests(
 ):
     """List join requests for managers or the current user's own requests otherwise."""
     project = await _get_project_or_404(project_id, fetch_links=True)
-    if can_manage_project_work(project, current_user):
+    has_project_management_access = await _has_project_management_access(current_user)
+    if can_manage_project_work(project, current_user, operations_override=has_project_management_access):
         join_requests = await ProjectJoinRequest.find(ProjectJoinRequest.project_id == project.id).to_list()
     else:
         join_requests = await ProjectJoinRequest.find(
@@ -86,7 +93,8 @@ async def create_project_join_request(
 ):
     """Request to join a project as a working member."""
     project = await _get_project_or_404(project_id, fetch_links=True)
-    if not can_request_project_access(project, current_user):
+    has_project_management_access = await _has_project_management_access(current_user)
+    if not can_request_project_access(project, current_user, operations_override=has_project_management_access):
         raise HTTPException(status_code=400, detail="You already have project access")
 
     existing_request = await ProjectJoinRequest.find_one(
@@ -123,7 +131,8 @@ async def review_project_join_request(
 ):
     """Approve or decline a join request."""
     project = await _get_project_or_404(project_id, fetch_links=True)
-    if not can_manage_project_work(project, current_user):
+    has_project_management_access = await _has_project_management_access(current_user)
+    if not can_manage_project_work(project, current_user, operations_override=has_project_management_access):
         raise HTTPException(status_code=403, detail="Project management access required")
 
     join_request = await _get_join_request_or_404(project_id, join_request_id)

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { useAuth } from '../lib/useAuth';
 import { api } from '../lib/api';
+import { openPortalAwareLink } from '../lib/fileLinks';
 import type { WeekInfo, WorkEntry, Submission, FileInfo, AdminSettings, FormSection } from '../lib/api';
 import FileUpload from '../components/FileUpload';
 import CommentSection from '../components/CommentSection';
@@ -484,13 +485,13 @@ export default function NewSubmissionPage() {
 
     const handleDownload = async (file: FileInfo) => {
         try {
-            const blob = await api.downloadFile(file.id);
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = file.name;
-            a.click();
-            URL.revokeObjectURL(url);
+            if (file.web_link) {
+                await openPortalAwareLink(file.web_link);
+                return;
+            }
+
+            const { url } = await api.getFileDownloadLink(file.id);
+            window.open(url, '_blank', 'noopener,noreferrer');
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Download failed');
         }
@@ -1312,6 +1313,10 @@ function ReadOnlyEntries({ entries, showHours }: { entries: FormEntry[]; showHou
                                 href={entry.drive_link}
                                 target="_blank"
                                 rel="noopener noreferrer"
+                                onClick={(event) => {
+                                    event.preventDefault();
+                                    void openPortalAwareLink(entry.drive_link);
+                                }}
                                 style={{ fontSize: '0.75rem', color: 'var(--color-primary-gold)', display: 'flex', alignItems: 'center', gap: '0.25rem', marginTop: '0.25rem' }}
                             >
                                 <LinkIcon size={12} /> Drive Link <ExternalLink size={10} />

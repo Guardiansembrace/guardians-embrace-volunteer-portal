@@ -1,0 +1,48 @@
+param(
+    [string]$PythonExecutable = (Join-Path (Get-Location) ".venv\Scripts\python.exe"),
+    [string]$PackageName = "backend-lambda.zip"
+)
+
+. (Join-Path $PSScriptRoot 'common.ps1')
+
+$repoRoot = Get-RepoRoot
+$buildRoot = Join-Path $repoRoot '.deployment\aws\build'
+$stageDir = Join-Path $buildRoot 'backend-lambda'
+$artifactDir = Join-Path $repoRoot '.deployment\aws\artifacts'
+$zipPath = Join-Path $artifactDir $PackageName
+$requirementsPath = Join-Path $repoRoot 'backend\requirements.lambda.txt'
+
+Ensure-Directory $buildRoot
+Ensure-Directory $artifactDir
+
+if (Test-Path $stageDir) {
+    Remove-Item -Recurse -Force $stageDir
+}
+if (Test-Path $zipPath) {
+    Remove-Item -Force $zipPath
+}
+
+Ensure-Directory $stageDir
+
+Write-Info 'Installing Lambda runtime dependencies'
+& $PythonExecutable -m pip install `
+    --upgrade `
+    --target $stageDir `
+    --platform manylinux2014_x86_64 `
+    --implementation cp `
+    --python-version 311 `
+    --only-binary=:all: `
+    -r $requirementsPath | Out-Host
+
+Write-Info 'Copying backend application code into the Lambda staging directory'
+Copy-Item -Recurse -Force (Join-Path $repoRoot 'backend\app') (Join-Path $stageDir 'app')
+Copy-Item -Recurse -Force (Join-Path $repoRoot 'shared') (Join-Path $stageDir 'shared')
+
+Write-Info 'Creating backend Lambda zip artifact'
+Compress-Archive -Path (Join-Path $stageDir '*') -DestinationPath $zipPath -Force
+
+$artifact = Get-Item $zipPath
+[pscustomobject]@{
+    ZipPath = $artifact.FullName
+    SizeBytes = $artifact.Length
+}

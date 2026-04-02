@@ -106,7 +106,14 @@ function AppRoutes() {
       <Route path="/submissions/:id" element={<ProtectedRoute><NewSubmissionPage /></ProtectedRoute>} />
 
       <Route path="/admin" element={<AdminPortalRoute><AdminDashboardPage /></AdminPortalRoute>} />
-      <Route path="/admin/users" element={<AdminScopeRoute scopes={['view_users', 'manage_users', 'manage_invites']}><AdminUsersPage /></AdminScopeRoute>} />
+      <Route
+        path="/admin/users"
+        element={
+          <AdminScopeRoute scopes={['view_users', 'edit_users', 'manage_user_status', 'manage_user_roles', 'manage_invites', 'view_admin_access', 'manage_admin_access']}>
+            <AdminUsersPage />
+          </AdminScopeRoute>
+        }
+      />
       <Route path="/admin/submissions" element={<AdminScopeRoute scopes={['review_submissions']}><AdminSubmissionsPage /></AdminScopeRoute>} />
       <Route path="/admin/settings" element={<AdminScopeRoute scopes={['manage_settings']}><AdminSettingsPage /></AdminScopeRoute>} />
       <Route path="/admin/audit" element={<AdminScopeRoute scopes={['view_audit_logs']}><AdminAuditPage /></AdminScopeRoute>} />

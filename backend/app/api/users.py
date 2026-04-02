@@ -11,9 +11,9 @@ logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.core.admin_access import AdminAccessScope, build_user_response, require_admin_scopes
+from app.core.admin_access import AdminAccessScope, build_user_response, get_admin_access_context, require_admin_scopes
 from app.core.rate_limit import rate_limit_by_user
-from app.core.security import get_current_user
+from app.core.security import get_current_user, has_operations_access
 from app.core.time import utc_now
 from app.models.user import User, UserRole, UserResponse, UserUpdate, UserAdminUpdate, SetNameRequest
 
@@ -94,12 +94,27 @@ async def list_all_users(
     is_active: Optional[bool] = Query(None, description="Filter by active status"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
-    current_user: User = Depends(require_admin_scopes(AdminAccessScope.VIEW_USERS, AdminAccessScope.MANAGE_USERS))
+    current_user: User = Depends(get_current_user),
 ):
     """
-    List all users for operational visibility.
+    List all users for operational visibility and project assignment.
     Supports filtering by role, team, and active status.
     """
+    if not has_operations_access(current_user):
+        access = await get_admin_access_context(current_user)
+        if not access.has_any_scope(
+            AdminAccessScope.VIEW_USERS,
+            AdminAccessScope.EDIT_USERS,
+            AdminAccessScope.MANAGE_USER_STATUS,
+            AdminAccessScope.MANAGE_USER_ROLES,
+            AdminAccessScope.MANAGE_ADMIN_ACCESS,
+            AdminAccessScope.MANAGE_PROJECTS,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin scope required",
+            )
+
     query = {}
     if role is not None:
         query["role"] = role
@@ -114,7 +129,7 @@ async def list_all_users(
 
 
 @router.get("/stats/overview")
-async def get_user_stats(current_user: User = Depends(require_admin_scopes(AdminAccessScope.VIEW_USERS, AdminAccessScope.MANAGE_USERS))):
+async def get_user_stats(current_user: User = Depends(require_admin_scopes(AdminAccessScope.VIEW_USERS))):
     """Get user statistics overview for operations staff."""
     total_users = await User.count()
     active_users = await User.find(User.is_active == True).count()
@@ -136,7 +151,7 @@ async def get_user_stats(current_user: User = Depends(require_admin_scopes(Admin
 @router.get("/{user_id}", response_model=UserResponse)
 async def get_user_by_id(
     user_id: str,
-    current_user: User = Depends(require_admin_scopes(AdminAccessScope.VIEW_USERS, AdminAccessScope.MANAGE_USERS))
+    current_user: User = Depends(require_admin_scopes(AdminAccessScope.VIEW_USERS))
 ):
     """Get a specific user by ID for operations staff."""
     from bson import ObjectId
@@ -163,9 +178,15 @@ async def get_user_by_id(
 async def admin_update_user(
     user_id: str,
     update: UserAdminUpdate,
-    current_user: User = Depends(require_admin_scopes(AdminAccessScope.MANAGE_USERS))
+    current_user: User = Depends(
+        require_admin_scopes(
+            AdminAccessScope.EDIT_USERS,
+            AdminAccessScope.MANAGE_USER_STATUS,
+            AdminAccessScope.MANAGE_USER_ROLES,
+        )
+    )
 ):
-    """Update a user's profile (admin only). Can change role and active status."""
+    """Update a user's profile with field-level delegated scope checks."""
     from bson import ObjectId
     
     try:
@@ -178,7 +199,41 @@ async def admin_update_user(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-    
+
+    access = await get_admin_access_context(current_user)
+    requested_changes = update.model_dump(exclude_unset=True)
+
+    if "name" in requested_changes or "team" in requested_changes:
+        if not access.has_any_scope(AdminAccessScope.EDIT_USERS):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Edit users access required",
+            )
+
+    if "is_active" in requested_changes:
+        if not access.has_any_scope(AdminAccessScope.MANAGE_USER_STATUS):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Manage user status access required",
+            )
+        if not access.is_admin and user.role == UserRole.ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only full admins can activate or deactivate admin accounts",
+            )
+
+    if "role" in requested_changes:
+        if not access.has_any_scope(AdminAccessScope.MANAGE_USER_ROLES):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Manage user roles access required",
+            )
+        if not access.is_admin and (user.role == UserRole.ADMIN or update.role == UserRole.ADMIN):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only full admins can assign or modify the administrator role",
+            )
+
     if update.name is not None:
         user.name = update.name
     if update.team is not None:

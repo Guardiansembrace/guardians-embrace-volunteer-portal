@@ -3,6 +3,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from beanie import PydanticObjectId
 
+from app.core.admin_access import AdminAccessScope, get_admin_access_context
 from app.core.project_access import can_manage_project_work, can_view_project, normalize_project_tags
 from app.core.rate_limit import rate_limit_by_user
 from app.core.security import get_current_operations, get_current_user, has_operations_access
@@ -18,6 +19,26 @@ from app.models.project import (
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 
+async def _has_project_management_access(user: User) -> bool:
+    if has_operations_access(user):
+        return True
+    access = await get_admin_access_context(user)
+    return access.has_any_scope(AdminAccessScope.MANAGE_PROJECTS)
+
+
+async def _get_assignable_user_or_404(user_id: str, *, detail: str) -> User:
+    try:
+        user = await User.get(PydanticObjectId(user_id))
+    except Exception:
+        user = None
+
+    if not user:
+        raise HTTPException(status_code=404, detail=detail)
+    if not user.is_active:
+        raise HTTPException(status_code=400, detail="User must be active")
+    return user
+
+
 def _serialize_project_user(user: User) -> ProjectUserSummary:
     """Convert a linked user doc into the lightweight project response shape."""
     return ProjectUserSummary(
@@ -27,6 +48,7 @@ def _serialize_project_user(user: User) -> ProjectUserSummary:
         picture=user.picture,
         role=user.role,
         team=user.team,
+        invited_only=getattr(user, "invited_only", False),
     )
 
 
@@ -95,17 +117,13 @@ async def create_project(
     project = Project(**project_data)
     
     if project_in.lead_id:
-        leader = await User.get(PydanticObjectId(project_in.lead_id))
-        if not leader:
-            raise HTTPException(status_code=404, detail="Leader user not found")
+        leader = await _get_assignable_user_or_404(project_in.lead_id, detail="Leader user not found")
         project.lead = leader
         
     if project_in.member_ids:
         members = []
         for uid in project_in.member_ids:
-            user = await User.get(PydanticObjectId(uid))
-            if user:
-                members.append(user)
+            members.append(await _get_assignable_user_or_404(uid, detail="Member user not found"))
         project.members = members
         
     await project.create()
@@ -142,7 +160,7 @@ async def update_project(
     """
     project = await _get_project_or_404(project_id)
     requested_fields = set(project_in.model_dump(exclude_unset=True).keys())
-    can_manage_all_project_fields = has_operations_access(current_user)
+    can_manage_all_project_fields = await _has_project_management_access(current_user)
 
     if not can_manage_all_project_fields and not can_manage_project_work(project, current_user):
         raise HTTPException(status_code=403, detail="Project edit access required")
@@ -160,17 +178,13 @@ async def update_project(
         update_data["tags"] = normalize_project_tags(update_data.get("tags"))
     
     if project_in.lead_id is not None:
-        leader = await User.get(PydanticObjectId(project_in.lead_id))
-        if not leader:
-            raise HTTPException(status_code=404, detail="Leader user not found")
+        leader = await _get_assignable_user_or_404(project_in.lead_id, detail="Leader user not found")
         project.lead = leader
         
     if project_in.member_ids is not None:
         members = []
         for uid in project_in.member_ids:
-            user = await User.get(PydanticObjectId(uid))
-            if user:
-                members.append(user)
+            members.append(await _get_assignable_user_or_404(uid, detail="Member user not found"))
         project.members = members
         
     await project.update({"$set": update_data})
@@ -194,9 +208,7 @@ async def add_member(
     """
     project = await _get_project_or_404(project_id, fetch_links=True)
         
-    user = await User.get(PydanticObjectId(user_id))
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    user = await _get_assignable_user_or_404(user_id, detail="User not found")
         
     # Check if already a member
     # Beanie links comparison might need ID check

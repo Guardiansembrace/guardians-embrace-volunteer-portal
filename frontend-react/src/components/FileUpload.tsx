@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { api } from '../lib/api';
 import type { UploadedFile } from '../lib/api';
+import { openPortalAwareLink } from '../lib/fileLinks';
 import { Upload, X, FileText, Check, AlertCircle, ExternalLink } from 'lucide-react';
 
 const BLOCKED_UPLOAD_EXTENSIONS = new Set([
@@ -41,7 +42,7 @@ export function FileUpload({ weekId, onFileUploaded, maxFiles = 10 }: FileUpload
     const [isDragging, setIsDragging] = useState(false);
     const [driveConfigured, setDriveConfigured] = useState<boolean | null>(null);
 
-    const [storageType, setStorageType] = useState<'drive_org' | 'drive_personal' | 'local' | null>(null);
+    const [storageType, setStorageType] = useState<'shared_drive' | 's3' | 'local' | null>(null);
     const [folderName, setFolderName] = useState<string | null>(null);
 
     // Check Drive status on first interaction
@@ -158,9 +159,17 @@ export function FileUpload({ weekId, onFileUploaded, maxFiles = 10 }: FileUpload
 
     const successfulUploads = files.filter(f => f.status === 'success');
 
+    const openUploadedFile = async (uploadedFile: UploadedFile) => {
+        if (uploadedFile.storage_type?.includes('drive')) {
+            window.open(uploadedFile.drive_link, '_blank', 'noopener,noreferrer');
+            return;
+        }
+        await openPortalAwareLink(uploadedFile.drive_link);
+    };
+
     const getStorageText = () => {
-        if (storageType === 'drive_org') return `Files uploaded to Organization Drive${folderName ? ` → ${folderName}` : ''}`;
-        if (storageType === 'drive_personal') return `Files uploaded to your Personal Drive${folderName ? ` → ${folderName}` : ''}`;
+        if (storageType === 'shared_drive') return `Files uploaded to Guardian's Drive${folderName ? ` -> ${folderName}` : ''}`;
+        if (storageType === 's3') return 'Files upload directly to secure cloud storage';
         return 'Files will be stored securely on the server';
     };
 
@@ -223,10 +232,10 @@ export function FileUpload({ weekId, onFileUploaded, maxFiles = 10 }: FileUpload
                         <span>Storage: Local Server</span>
                     </div>
                 )}
-                {(storageType === 'drive_org' || storageType === 'drive_personal') && (
+                {(storageType === 'shared_drive' || storageType === 's3') && (
                     <div style={{ color: 'var(--color-success)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         <Check size={16} />
-                        <span>Storage: {storageType === 'drive_org' ? 'Guardian\'s Drive' : 'Personal Drive'}</span>
+                        <span>Storage: {storageType === 'shared_drive' ? 'Guardian\'s Drive' : 'AWS S3'}</span>
                     </div>
                 )}
             </div>
@@ -278,20 +287,27 @@ export function FileUpload({ weekId, onFileUploaded, maxFiles = 10 }: FileUpload
 
                                     {uploadingFile.status === 'success' && uploadingFile.result && (
                                         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                                            <a
-                                                href={uploadingFile.result.drive_link}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    if (uploadingFile.result) {
+                                                        void openUploadedFile(uploadingFile.result);
+                                                    }
+                                                }}
                                                 style={{
                                                     fontSize: '0.75rem',
                                                     color: 'var(--color-primary-gold)',
                                                     display: 'flex',
                                                     alignItems: 'center',
                                                     gap: '0.25rem',
+                                                    background: 'none',
+                                                    border: 'none',
+                                                    padding: 0,
+                                                    cursor: 'pointer',
                                                 }}
                                             >
                                                 {uploadingFile.result.storage_type?.includes('drive') ? 'View in Drive' : 'Download File'} <ExternalLink size={12} />
-                                            </a>
+                                            </button>
 
                                             {/* Location Badge */}
                                             <span style={{
@@ -306,8 +322,8 @@ export function FileUpload({ weekId, onFileUploaded, maxFiles = 10 }: FileUpload
                                                     : 'var(--color-text-muted)',
                                                 border: '1px solid currentColor'
                                             }}>
-                                                {uploadingFile.result.storage_type === 'drive_org' && 'Org Drive'}
-                                                {uploadingFile.result.storage_type === 'drive_personal' && 'Personal Drive'}
+                                                {uploadingFile.result.storage_type === 'shared_drive' && 'Org Drive'}
+                                                {uploadingFile.result.storage_type === 's3' && 'AWS S3'}
                                                 {uploadingFile.result.storage_type === 'local' && 'Local Server'}
                                             </span>
                                         </div>

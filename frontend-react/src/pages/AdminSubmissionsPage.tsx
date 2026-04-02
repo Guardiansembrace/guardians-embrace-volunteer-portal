@@ -15,6 +15,7 @@ import {
 import { Navbar, Footer } from '../components/Layout';
 import { Badge, Button, EmptyState, LoadingSpinner } from '../components/ui';
 import { api } from '../lib/api';
+import { openPortalAwareLink } from '../lib/fileLinks';
 import type { Submission, SubmissionSummary } from '../lib/api';
 import { useAuth } from '../lib/useAuth';
 
@@ -494,7 +495,20 @@ export default function AdminSubmissionsPage() {
                                                 <p style={{ margin: 0, color: '#334155', lineHeight: 1.5 }}>{entry.description}</p>
                                                 <div style={{ display: 'flex', gap: '1rem', marginTop: '0.75rem', fontSize: '0.85rem' }}>
                                                     <span style={{ color: '#64748b', display: 'flex', alignItems: 'center', gap: '0.3rem', fontWeight: 600 }}><Clock size={14} /> {entry.hours}h</span>
-                                                    {entry.drive_link && <a href={entry.drive_link} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-primary-gold)', fontWeight: 600 }}>External Link →</a>}
+                                                    {entry.drive_link && (
+                                                        <a
+                                                            href={entry.drive_link}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            onClick={(event) => {
+                                                                event.preventDefault();
+                                                                void openPortalAwareLink(entry.drive_link!);
+                                                            }}
+                                                            style={{ color: 'var(--color-primary-gold)', fontWeight: 600 }}
+                                                        >
+                                                            External Link →
+                                                        </a>
+                                                    )}
                                                 </div>
                                             </div>
                                         ))}

@@ -102,6 +102,7 @@ class ProjectUserSummary(BaseModel):
     picture: Optional[str] = None
     role: UserRole
     team: Optional[str] = None
+    invited_only: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 

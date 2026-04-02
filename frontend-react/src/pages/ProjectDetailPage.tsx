@@ -92,6 +92,12 @@ function formatInputDate(value?: string) {
     return value ? value.slice(0, 10) : '';
 }
 
+function getProjectLeadDisplayName(lead: Project['lead']) {
+    if (!lead) return '';
+    if (lead.invited_only) return lead.email;
+    return lead.name || lead.email;
+}
+
 function getPriorityStyles(priority: ProjectWorkItem['priority']) {
     const styles: Record<ProjectWorkItem['priority'], { background: string; color: string; border: string }> = {
         low: { background: '#f8fafc', color: '#64748b', border: '#e2e8f0' },
@@ -519,7 +525,24 @@ export default function ProjectDetailPage() {
                                         </div>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }} title="Project Lead">
                                             <UserIcon size={16} style={{ color: '#94a3b8' }} />
-                                            <span>{project.lead ? <span style={{ color: '#0f172a', fontWeight: 600 }}>{project.lead.name}</span> : 'No lead assigned'}</span>
+                                            <span>
+                                                {project.lead ? (
+                                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                                        <span style={{ color: '#0f172a', fontWeight: 700 }}>
+                                                            {formatTagLabel(project.lead.role)}:
+                                                        </span>
+                                                        <span style={{ color: '#0f172a', fontWeight: 600 }}>
+                                                            {getProjectLeadDisplayName(project.lead)}
+                                                        </span>
+                                                        {!project.lead.invited_only && (
+                                                            <span style={{ color: '#64748b' }}>{project.lead.email}</span>
+                                                        )}
+                                                        {project.lead.invited_only && (
+                                                            <span style={{ color: '#b45309', fontWeight: 600 }}>Pending login</span>
+                                                        )}
+                                                    </span>
+                                                ) : 'No lead assigned'}
+                                            </span>
                                         </div>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }} title="Your Access Level">
                                             <Layers3 size={16} style={{ color: '#94a3b8' }} />
@@ -794,12 +817,12 @@ export default function ProjectDetailPage() {
                                             <option value="">Unassigned</option>
                                             {assignableUsers.map((candidate) => (
                                                 <option key={candidate.id} value={candidate.id}>
-                                                    {candidate.name} - {candidate.email} ({formatTagLabel(candidate.role)})
+                                                    {candidate.name} - {candidate.email} ({formatTagLabel(candidate.role)}{candidate.invited_only ? ' - Pending login' : ''})
                                                 </option>
                                             ))}
                                         </select>
                                             <p style={{ margin: '0.5rem 0 0', fontSize: '0.8rem', color: '#64748b' }}>
-                                                Choose someone already added to this project. Assignees must have an active account in the volunteer database.
+                                                Choose someone already added to this project. Invited teammates are marked until they complete their first login.
                                             </p>
                                         </div>
                                     ) : (

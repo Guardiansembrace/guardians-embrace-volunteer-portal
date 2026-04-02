@@ -14,6 +14,7 @@ from app.core import rate_limit as rate_limit_core
 from app.core.security import get_current_admin_user, get_current_operations_user, get_current_user
 from app.core.time import utc_now
 from app.api import invites as invites_api
+from app.api import admin_access as admin_access_api
 from app.api import monitoring as monitoring_api
 from app.api import files as files_api
 from app.api import projects as projects_api
@@ -21,6 +22,9 @@ from app.api import project_join_requests as project_join_requests_api
 from app.api import project_work_items as project_work_items_api
 from app.api import settings as settings_api
 from app.api import submissions as submissions_api
+from app.api import users as users_api
+from app.core import admin_access as admin_access_core
+from app.models.admin_access import AdminAccessGrantCreate, AdminAccessScope
 from app.models.settings import AdminSettings, FormSection, WeeklyUpdateSettings
 from app.models.submission import SubmissionStatus
 from app.models.user import UserRole
@@ -37,7 +41,13 @@ class FakeField:
         return (self.name, "!=", other)
 
 
-def make_user(*, role: UserRole = UserRole.VOLUNTEER, profile_complete: bool = True):
+def make_user(
+    *,
+    role: UserRole = UserRole.VOLUNTEER,
+    profile_complete: bool = True,
+    invited_only: bool = False,
+    last_login: datetime | None = datetime(2026, 3, 18),
+):
     user = SimpleNamespace(
         id="user-123",
         email="user@example.com",
@@ -46,13 +56,14 @@ def make_user(*, role: UserRole = UserRole.VOLUNTEER, profile_complete: bool = T
         role=role,
         team="Operations",
         is_active=True,
+        invited_only=invited_only,
         total_hours=12.5,
         total_submissions=4,
         submission_streak=2,
         profile_complete=profile_complete,
         file_access_expires=None,
         created_at=datetime(2026, 3, 1),
-        last_login=datetime(2026, 3, 18),
+        last_login=last_login,
         updated_at=datetime(2026, 3, 18),
     )
     user.save = AsyncMock()
@@ -70,6 +81,37 @@ def api_client(monkeypatch):
 
     rate_limit_core.reset_rate_limit_state()
     app.dependency_overrides.clear()
+
+
+def test_get_current_user_profile_keeps_pending_login_state(api_client):
+    user = make_user(profile_complete=False, invited_only=True, last_login=None)
+    app.dependency_overrides[get_current_user] = lambda: user
+
+    response = api_client.get("/api/v1/users/me")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["invited_only"] is True
+    assert body["last_login"] is None
+
+
+def test_team_lead_can_list_active_users_for_project_assignment(api_client, monkeypatch):
+    team_lead = make_user(role=UserRole.TEAM_LEAD)
+    app.dependency_overrides[get_current_user] = lambda: team_lead
+
+    chain = MagicMock()
+    chain.skip.return_value = chain
+    chain.limit.return_value = chain
+    chain.to_list = AsyncMock(return_value=[])
+
+    find_mock = MagicMock(return_value=chain)
+    monkeypatch.setattr(users_api, "User", SimpleNamespace(find=find_mock))
+
+    response = api_client.get("/api/v1/users?is_active=true")
+
+    assert response.status_code == 200
+    assert response.json() == []
+    find_mock.assert_called_once_with({"is_active": True})
 
 
 def test_set_name_updates_profile_and_marks_user_complete(api_client):
@@ -338,11 +380,31 @@ def test_invite_and_revoke_flow(api_client, monkeypatch):
 
     FakeAllowedEmailDoc.email = FakeField("email")
 
+    inserted_users: list[object] = []
+
+    @dataclass
     class FakeUserDoc:
-        email = FakeField("email")
+        email: str
+        name: str
+        role: UserRole
+        is_active: bool = True
+        profile_complete: bool = False
+        invited_only: bool = False
+        last_login: datetime | None = None
+
+        async def insert(self):
+            inserted_users.append(self)
+
+        async def save(self):
+            return None
+
+    FakeUserDoc.email = FakeField("email")
 
     async def fake_invite_find_one(*_args, **_kwargs):
         return None
+
+    async def fake_user_find_one(*_args, **_kwargs):
+        return inserted_users[0] if inserted_users else None
 
     delete_mock = AsyncMock()
 
@@ -350,7 +412,7 @@ def test_invite_and_revoke_flow(api_client, monkeypatch):
     monkeypatch.setattr(invites_api, "User", FakeUserDoc)
     monkeypatch.setattr("app.api.invites.is_email_configured", lambda: False)
     monkeypatch.setattr(FakeAllowedEmailDoc, "find_one", AsyncMock(side_effect=fake_invite_find_one), raising=False)
-    monkeypatch.setattr(FakeUserDoc, "find_one", AsyncMock(return_value=None), raising=False)
+    monkeypatch.setattr(FakeUserDoc, "find_one", AsyncMock(side_effect=fake_user_find_one), raising=False)
 
     create_response = api_client.post(
         "/api/v1/invites",
@@ -360,15 +422,134 @@ def test_invite_and_revoke_flow(api_client, monkeypatch):
     assert create_response.status_code == 201
     assert create_response.json()["email"] == "test@example.com"
     assert inserted_invites[0].invited_by == "admin@example.com"
+    assert inserted_users[0].email == "test@example.com"
+    assert inserted_users[0].invited_only is True
+    assert inserted_users[0].is_active is True
+    assert inserted_users[0].last_login is None
 
     invite_to_delete = inserted_invites[0]
     invite_to_delete.delete = delete_mock
     monkeypatch.setattr(FakeAllowedEmailDoc, "find_one", AsyncMock(return_value=invite_to_delete), raising=False)
+    inserted_users[0].save = AsyncMock()
 
     revoke_response = api_client.delete("/api/v1/invites/test@example.com")
 
     assert revoke_response.status_code == 204
     delete_mock.assert_awaited_once()
+    assert inserted_users[0].is_active is False
+    inserted_users[0].save.assert_awaited_once()
+
+
+def test_legacy_manage_users_scope_normalizes_to_profile_and_status_access():
+    scopes = admin_access_core.normalize_admin_scopes([AdminAccessScope.MANAGE_USERS])
+
+    assert scopes == [
+        AdminAccessScope.VIEW_USERS,
+        AdminAccessScope.EDIT_USERS,
+        AdminAccessScope.MANAGE_USER_STATUS,
+    ]
+
+
+def test_delegated_role_manager_cannot_promote_someone_to_admin(monkeypatch):
+    target_user_id = "507f1f77bcf86cd799439011"
+    current_user = make_user(role=UserRole.VOLUNTEER)
+    current_user.id = "delegate-1"
+    target_user = make_user(role=UserRole.VOLUNTEER)
+    target_user.id = target_user_id
+
+    monkeypatch.setattr(users_api.User, "get", AsyncMock(return_value=target_user))
+    monkeypatch.setattr(
+        users_api,
+        "get_admin_access_context",
+        AsyncMock(return_value=SimpleNamespace(
+            is_admin=False,
+            has_any_scope=lambda *scopes: AdminAccessScope.MANAGE_USER_ROLES in scopes,
+        )),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            users_api.admin_update_user(
+                target_user_id,
+                users_api.UserAdminUpdate(role=UserRole.ADMIN),
+                current_user=current_user,
+            )
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Only full admins can assign or modify the administrator role"
+
+
+def test_edit_only_delegate_cannot_toggle_user_status(monkeypatch):
+    target_user_id = "507f1f77bcf86cd799439012"
+    current_user = make_user(role=UserRole.VOLUNTEER)
+    current_user.id = "delegate-2"
+    target_user = make_user(role=UserRole.VOLUNTEER)
+    target_user.id = target_user_id
+
+    monkeypatch.setattr(users_api.User, "get", AsyncMock(return_value=target_user))
+    monkeypatch.setattr(
+        users_api,
+        "get_admin_access_context",
+        AsyncMock(return_value=SimpleNamespace(
+            is_admin=False,
+            has_any_scope=lambda *scopes: AdminAccessScope.EDIT_USERS in scopes,
+        )),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            users_api.admin_update_user(
+                target_user_id,
+                users_api.UserAdminUpdate(is_active=False),
+                current_user=current_user,
+            )
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Manage user status access required"
+
+
+def test_non_admin_access_manager_cannot_delegate_sensitive_scopes(monkeypatch):
+    target_user_id = "507f1f77bcf86cd799439013"
+    current_user = make_user(role=UserRole.VOLUNTEER)
+    current_user.id = "delegate-3"
+    current_user.email = "delegate@example.com"
+    current_user.name = "Delegate Manager"
+    target_user = make_user(role=UserRole.VOLUNTEER)
+    target_user.id = target_user_id
+
+    monkeypatch.setattr(admin_access_api.User, "get", AsyncMock(return_value=target_user))
+    monkeypatch.setattr(admin_access_api.AdminAccessGrant, "find_one", AsyncMock(return_value=None), raising=False)
+    monkeypatch.setattr(admin_access_api, "write_audit_log", AsyncMock())
+    monkeypatch.setattr(
+        admin_access_api,
+        "get_admin_access_context",
+        AsyncMock(return_value=SimpleNamespace(
+            is_admin=False,
+            scopes=[
+                AdminAccessScope.MANAGE_ADMIN_ACCESS,
+                AdminAccessScope.VIEW_USERS,
+                AdminAccessScope.EDIT_USERS,
+                AdminAccessScope.VIEW_ADMIN_ACCESS,
+            ],
+        )),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            admin_access_api.create_admin_access_grant(
+                AdminAccessGrantCreate(
+                    user_id=target_user_id,
+                    scopes=[AdminAccessScope.MANAGE_USER_ROLES],
+                ),
+                request=SimpleNamespace(),
+                current_admin=current_user,
+            )
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "You can only delegate the non-sensitive admin scopes you currently hold"
 
 
 def test_frontend_error_reports_are_logged(api_client, monkeypatch):
@@ -507,6 +688,7 @@ def test_get_projects_serializes_linked_users(api_client, monkeypatch):
                 "picture": None,
                 "role": "team_lead",
                 "team": "Programs",
+                "invited_only": False,
             },
             "members": [
                 {
@@ -516,6 +698,7 @@ def test_get_projects_serializes_linked_users(api_client, monkeypatch):
                     "picture": None,
                     "role": "volunteer",
                     "team": "Outreach",
+                    "invited_only": False,
                 }
             ],
             "created_at": "2026-03-20T00:00:00",

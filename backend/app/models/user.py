@@ -38,7 +38,10 @@ class User(Document, UserBase):
     """
     
     email: Indexed(EmailStr, unique=True)
-    google_id: Indexed(str, unique=True)
+    # Existing Atlas data contains historical users without Google IDs.
+    # Keep the field optional so the app can coexist with that dataset and
+    # populate the Google subject on the next successful login.
+    google_id: Optional[str] = None
     
     # Profile
     name: str
@@ -50,11 +53,12 @@ class User(Document, UserBase):
     
     # Status
     is_active: bool = True
+    invited_only: bool = False
     
     # Timestamps
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
-    last_login: datetime = Field(default_factory=utc_now)
+    last_login: Optional[datetime] = None
     
     # Stats (denormalized for quick access)
     total_hours: float = 0.0
@@ -135,6 +139,7 @@ class UserResponse(BaseModel):
     role: UserRole
     team: Optional[str] = None
     is_active: bool
+    invited_only: bool = False
     total_hours: float
     total_submissions: int
     submission_streak: int = 0
@@ -142,6 +147,6 @@ class UserResponse(BaseModel):
     file_access_expires: Optional[datetime] = None
     admin_access: AdminAccessSummary = Field(default_factory=AdminAccessSummary)
     created_at: datetime
-    last_login: datetime
+    last_login: Optional[datetime] = None
     
     model_config = ConfigDict(from_attributes=True)

@@ -10,12 +10,19 @@ from app.core.time import utc_now
 
 class AdminAccessScope(str, Enum):
     VIEW_USERS = "view_users"
+    EDIT_USERS = "edit_users"
+    MANAGE_USER_STATUS = "manage_user_status"
+    MANAGE_USER_ROLES = "manage_user_roles"
+    # Legacy umbrella scope kept only so older grants stored in MongoDB still deserialize.
     MANAGE_USERS = "manage_users"
     REVIEW_SUBMISSIONS = "review_submissions"
     SEND_REMINDERS = "send_reminders"
     MANAGE_INVITES = "manage_invites"
+    MANAGE_PROJECTS = "manage_projects"
     MANAGE_SETTINGS = "manage_settings"
     VIEW_AUDIT_LOGS = "view_audit_logs"
+    VIEW_ADMIN_ACCESS = "view_admin_access"
+    MANAGE_ADMIN_ACCESS = "manage_admin_access"
 
 
 class AdminAccessGrant(Document):

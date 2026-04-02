@@ -2,7 +2,6 @@ name: Basic CI/CD
 
 on:
   push:
-    branches: ["main"]
   pull_request:
     branches: ["main"]
   workflow_dispatch:
@@ -15,6 +14,8 @@ jobs:
   backend-checks:
     name: Backend Checks
     runs-on: ubuntu-latest
+    env:
+      USE_MOCK_DB: "true"
     defaults:
       run:
         working-directory: ./backend

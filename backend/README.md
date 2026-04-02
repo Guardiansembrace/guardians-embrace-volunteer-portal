@@ -5,14 +5,27 @@ The volunteer portal API built with FastAPI, MongoDB, and Beanie ODM.
 ## Setup
 
 ```bash
-python -m venv venv
-venv\Scripts\activate           # Windows
-# source venv/bin/activate      # macOS / Linux
+py -m venv .venv
+.venv\Scripts\activate          # Windows
+# source .venv/bin/activate     # macOS / Linux
 
 pip install -r requirements.txt
 cp .env.example .env            # fill in credentials
-python -m uvicorn app.main:app --reload --port 8081
 ```
+
+### Start the backend
+
+Windows:
+```bash
+run-dev.cmd
+```
+
+macOS / Linux:
+```bash
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8081
+```
+
+On Windows, prefer `run-dev.cmd`. It always uses the repo virtual environment and avoids the reload/subprocess startup path that can crash with Anaconda or a global `uvicorn`.
 
 API docs: `http://localhost:8081/api/docs`
 

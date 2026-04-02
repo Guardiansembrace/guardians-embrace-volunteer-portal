@@ -15,19 +15,34 @@ from app.models.user import AdminAccessSummary, User, UserResponse, UserRole
 
 ADMIN_SCOPE_ORDER = [
     AdminAccessScope.VIEW_USERS,
-    AdminAccessScope.MANAGE_USERS,
+    AdminAccessScope.EDIT_USERS,
+    AdminAccessScope.MANAGE_USER_STATUS,
+    AdminAccessScope.MANAGE_USER_ROLES,
     AdminAccessScope.REVIEW_SUBMISSIONS,
     AdminAccessScope.SEND_REMINDERS,
     AdminAccessScope.MANAGE_INVITES,
+    AdminAccessScope.MANAGE_PROJECTS,
     AdminAccessScope.MANAGE_SETTINGS,
     AdminAccessScope.VIEW_AUDIT_LOGS,
+    AdminAccessScope.VIEW_ADMIN_ACCESS,
+    AdminAccessScope.MANAGE_ADMIN_ACCESS,
 ]
 
 
 def normalize_admin_scopes(scopes: Iterable[AdminAccessScope | str]) -> List[AdminAccessScope]:
     normalized = {AdminAccessScope(scope) for scope in scopes}
     if AdminAccessScope.MANAGE_USERS in normalized:
+        normalized.discard(AdminAccessScope.MANAGE_USERS)
+        normalized.add(AdminAccessScope.EDIT_USERS)
+        normalized.add(AdminAccessScope.MANAGE_USER_STATUS)
+    if normalized.intersection({
+        AdminAccessScope.EDIT_USERS,
+        AdminAccessScope.MANAGE_USER_STATUS,
+        AdminAccessScope.MANAGE_USER_ROLES,
+    }):
         normalized.add(AdminAccessScope.VIEW_USERS)
+    if AdminAccessScope.MANAGE_ADMIN_ACCESS in normalized:
+        normalized.add(AdminAccessScope.VIEW_ADMIN_ACCESS)
     return [scope for scope in ADMIN_SCOPE_ORDER if scope in normalized]
 
 
@@ -105,6 +120,7 @@ async def build_user_response(user: User) -> UserResponse:
         role=user.role,
         team=user.team,
         is_active=user.is_active,
+        invited_only=getattr(user, "invited_only", False),
         total_hours=user.total_hours,
         total_submissions=user.total_submissions,
         submission_streak=user.submission_streak,

@@ -4,6 +4,7 @@ from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.projects import _get_project_or_404
+from app.core.admin_access import AdminAccessScope, get_admin_access_context
 from app.core.project_access import (
     can_assign_project_work,
     can_claim_project_work_item,
@@ -65,6 +66,11 @@ async def _get_project_with_access(project_id: str, current_user: User) -> Proje
     return project
 
 
+async def _has_project_management_access(current_user: User) -> bool:
+    access = await get_admin_access_context(current_user)
+    return access.has_any_scope(AdminAccessScope.MANAGE_PROJECTS)
+
+
 async def _get_work_item_or_404(project_id: str, work_item_id: str) -> ProjectWorkItem:
     try:
         item_object_id = PydanticObjectId(work_item_id)
@@ -106,12 +112,34 @@ async def _resolve_assignee(
     return assignee
 
 
-def _can_edit_work_item(project: Project, work_item: ProjectWorkItem, current_user: User) -> bool:
-    return can_edit_project_work_item(project, work_item, current_user)
+def _can_edit_work_item(
+    project: Project,
+    work_item: ProjectWorkItem,
+    current_user: User,
+    *,
+    operations_override: bool = False,
+) -> bool:
+    return can_edit_project_work_item(
+        project,
+        work_item,
+        current_user,
+        operations_override=operations_override,
+    )
 
 
-def _can_delete_work_item(project: Project, work_item: ProjectWorkItem, current_user: User) -> bool:
-    return can_delete_project_work_item(project, work_item, current_user)
+def _can_delete_work_item(
+    project: Project,
+    work_item: ProjectWorkItem,
+    current_user: User,
+    *,
+    operations_override: bool = False,
+) -> bool:
+    return can_delete_project_work_item(
+        project,
+        work_item,
+        current_user,
+        operations_override=operations_override,
+    )
 
 
 @router.get("/{project_id}/work-items", response_model=List[ProjectWorkItemResponse])
@@ -142,13 +170,14 @@ async def create_project_work_item(
 ):
     """Create a work item inside a project."""
     project = await _get_project_with_access(project_id, current_user)
-    if not can_contribute_to_project(project, current_user):
+    has_project_management_access = await _has_project_management_access(current_user)
+    if not can_contribute_to_project(project, current_user, operations_override=has_project_management_access):
         raise HTTPException(status_code=403, detail="Project contribution access required")
 
     requested_assignee_id = work_item_in.assignee_id
-    if requested_assignee_id and not can_assign_project_work(project, current_user):
+    if requested_assignee_id and not can_assign_project_work(project, current_user, operations_override=has_project_management_access):
         raise HTTPException(status_code=403, detail="Project assignment access required")
-    if not requested_assignee_id and not can_manage_project_work(project, current_user):
+    if not requested_assignee_id and not can_manage_project_work(project, current_user, operations_override=has_project_management_access):
         requested_assignee_id = str(current_user.id)
 
     assignee = await _resolve_assignee(project, requested_assignee_id)
@@ -188,6 +217,7 @@ async def update_project_work_item(
     """Update an existing project work item."""
     project = await _get_project_with_access(project_id, current_user)
     work_item = await _get_work_item_or_404(project_id, work_item_id)
+    has_project_management_access = await _has_project_management_access(current_user)
 
     update_data = work_item_in.model_dump(exclude_unset=True, exclude={"assignee_id"})
     requested_assignee_id = (
@@ -197,11 +227,20 @@ async def update_project_work_item(
     )
     is_self_claim = requested_assignee_id == str(current_user.id)
 
-    if not _can_edit_work_item(project, work_item, current_user):
+    if not _can_edit_work_item(
+        project,
+        work_item,
+        current_user,
+        operations_override=has_project_management_access,
+    ):
         if not (
             is_self_claim
             and not update_data
-            and can_claim_project_work_item(project, current_user)
+            and can_claim_project_work_item(
+                project,
+                current_user,
+                operations_override=has_project_management_access,
+            )
         ):
             raise HTTPException(status_code=403, detail="Work item edit access required")
 
@@ -209,7 +248,11 @@ async def update_project_work_item(
         current_assignee_id = str(work_item.assignee_id) if work_item.assignee_id else None
 
         if requested_assignee_id != current_assignee_id:
-            if not is_self_claim and not can_assign_project_work(project, current_user):
+            if not is_self_claim and not can_assign_project_work(
+                project,
+                current_user,
+                operations_override=has_project_management_access,
+            ):
                 raise HTTPException(status_code=403, detail="Project assignment access required")
             assignee = await _resolve_assignee(project, work_item_in.assignee_id)
             work_item.assignee_id = assignee.id if assignee else None
@@ -239,8 +282,14 @@ async def delete_project_work_item(
     """Delete a project work item."""
     project = await _get_project_with_access(project_id, current_user)
     work_item = await _get_work_item_or_404(project_id, work_item_id)
+    has_project_management_access = await _has_project_management_access(current_user)
 
-    if not _can_delete_work_item(project, work_item, current_user):
+    if not _can_delete_work_item(
+        project,
+        work_item,
+        current_user,
+        operations_override=has_project_management_access,
+    ):
         raise HTTPException(status_code=403, detail="Work item delete access required")
 
     await work_item.delete()

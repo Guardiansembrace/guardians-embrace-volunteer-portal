@@ -84,7 +84,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isAuthenticated: !!user,
         isAdmin,
         isTeamLead: user?.role === 'team_lead',
-        canManageOperations: user?.role === 'admin' || user?.role === 'team_lead',
+        canManageOperations: user?.role === 'admin' || user?.role === 'team_lead' || hasAdminScope('manage_projects'),
         canAccessAdminPortal,
         isDelegatedAdmin: Boolean(user?.admin_access?.is_delegated),
         adminScopes,

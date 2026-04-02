@@ -13,6 +13,38 @@ from app.models.allowed_email import AllowedEmail, AllowedEmailCreate
 router = APIRouter(prefix="/invites", tags=["invites"])
 
 
+def _build_invited_user_name(email: str) -> str:
+    local_part = email.split("@", 1)[0]
+    normalized = local_part.replace(".", " ").replace("_", " ").replace("-", " ").strip()
+    if not normalized:
+        return email
+    return " ".join(part.capitalize() for part in normalized.split())
+
+
+async def _sync_pending_user(email: str, role: UserRole) -> None:
+    existing_user = await User.find_one(User.email == email)
+    if existing_user:
+        if existing_user.invited_only:
+            existing_user.name = _build_invited_user_name(email)
+            existing_user.role = role
+            existing_user.is_active = True
+            existing_user.profile_complete = False
+            existing_user.last_login = None
+        await existing_user.save()
+        return
+
+    placeholder_user = User(
+        email=email,
+        name=_build_invited_user_name(email),
+        role=role,
+        is_active=True,
+        profile_complete=False,
+        invited_only=True,
+        last_login=None,
+    )
+    await placeholder_user.insert()
+
+
 @router.get("", response_model=List[AllowedEmail])
 async def list_invites(
     current_admin: User = Depends(require_admin_scopes(AdminAccessScope.MANAGE_INVITES))
@@ -46,15 +78,13 @@ async def invite_user(
             detail="User already invited"
         )
         
-    # Check if user already registered
-    existing_user = await User.find_one(User.email == invite_in.email)
-    
     invite = AllowedEmail(
         email=invite_in.email,
         role=invite_in.role,
         invited_by=current_admin.email
     )
     await invite.insert()
+    await _sync_pending_user(invite.email, invite.role)
 
     # Send Invitation Email
     if is_email_configured():
@@ -63,7 +93,8 @@ async def invite_user(
         html_body = build_invitation_html(
             email=invite.email,
             role=invite.role,
-            invited_by=current_admin.email or "Admin"
+            invited_by=current_admin.email or "Admin",
+            portal_url=settings.frontend_url,
         )
         background_tasks.add_task(
             send_email,
@@ -94,6 +125,11 @@ async def revoke_invite(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Invitation not found"
         )
+
+    pending_user = await User.find_one(User.email == email)
+    if pending_user and pending_user.invited_only:
+        pending_user.is_active = False
+        await pending_user.save()
     
     await invite.delete()
 
@@ -124,7 +160,8 @@ async def resend_invite(
         html_body = build_invitation_html(
             email=invite.email,
             role=invite.role,
-            invited_by=invite.invited_by or current_admin.email or "Admin"
+            invited_by=invite.invited_by or current_admin.email or "Admin",
+            portal_url=settings.frontend_url,
         )
         background_tasks.add_task(
             send_email,

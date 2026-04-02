@@ -59,8 +59,14 @@ export function canViewProject(_project: Project, _user: User) {
     return true;
 }
 
+function hasProjectManagementScope(user: Pick<User, 'role' | 'admin_access'>) {
+    return user.role === 'admin'
+        || user.role === 'team_lead'
+        || Boolean(user.admin_access?.scopes?.includes('manage_projects'));
+}
+
 export function canManageProjectWork(project: Project, user: User) {
-    return user.role === 'admin' || user.role === 'team_lead' || isProjectLead(project, user);
+    return hasProjectManagementScope(user) || isProjectLead(project, user);
 }
 
 export function canContributeToProject(project: Project, user: User) {

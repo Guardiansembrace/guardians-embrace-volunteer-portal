@@ -237,6 +237,27 @@ describe('ProjectDetailPage flows', () => {
         expect(await screen.findByText(/Request pending approval since/i)).toBeInTheDocument();
     });
 
+    it('shows the project lead role with email context in the header', async () => {
+        mocks.getProject.mockResolvedValue(
+            makeProject({
+                lead: makeProjectUser({
+                    id: 'lead-1',
+                    name: 'Ujwalvanjare7',
+                    email: 'ujwalvanjare7@gmail.com',
+                    role: 'team_lead',
+                    invited_only: true,
+                }),
+            }),
+        );
+
+        renderProjectDetail();
+
+        expect(await screen.findByText('Website Refresh')).toBeInTheDocument();
+        expect(screen.getByText('Team Lead:')).toBeInTheDocument();
+        expect(screen.getByText('ujwalvanjare7@gmail.com')).toBeInTheDocument();
+        expect(screen.getByText('Pending login')).toBeInTheDocument();
+    });
+
     it('lets a board manager approve pending join requests', async () => {
         const leadUser = makeUser({
             id: 'lead-1',

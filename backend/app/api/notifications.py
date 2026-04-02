@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from app.core.admin_access import AdminAccessScope, require_admin_scopes
+from app.core.config import get_settings
 from app.core.rate_limit import rate_limit_by_user
 from app.core.email import send_email, build_reminder_html, is_email_configured
 from app.core.utils import get_week_id, get_submission_deadline
@@ -65,6 +66,7 @@ async def send_weekly_reminders(
     target_week = week_id or get_week_id()
     deadline = get_submission_deadline(target_week)
     deadline_str = deadline.strftime("%A, %B %d at %I:%M %p")
+    settings = get_settings()
 
     # Get all active volunteers
     all_users = await User.find(
@@ -101,6 +103,7 @@ async def send_weekly_reminders(
             volunteer_name=user.name,
             week_id=target_week,
             deadline_str=deadline_str,
+            portal_url=settings.frontend_url,
         )
         emails_to_send.append((user.email, html))
 

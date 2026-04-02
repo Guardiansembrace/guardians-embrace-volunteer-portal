@@ -10,12 +10,17 @@ import { format, parseISO } from 'date-fns';
 
 const ADMIN_SCOPE_OPTIONS: Array<{ scope: AdminAccessScope; label: string; description: string }> = [
     { scope: 'view_users', label: 'View users', description: 'Open the user directory and inspect accounts.' },
-    { scope: 'manage_users', label: 'Manage users', description: 'Change roles, activate accounts, and edit users.' },
+    { scope: 'edit_users', label: 'Edit user profiles', description: 'Update user names and team assignments without changing access.' },
+    { scope: 'manage_user_status', label: 'Manage account status', description: 'Activate or deactivate user accounts.' },
+    { scope: 'manage_user_roles', label: 'Manage user roles', description: 'Promote or demote volunteers and team leads.' },
     { scope: 'review_submissions', label: 'Review submissions', description: 'Open the submission queue and mark reports reviewed.' },
     { scope: 'send_reminders', label: 'Send reminders', description: 'Check email status and send reminder emails.' },
     { scope: 'manage_invites', label: 'Manage invites', description: 'Create, resend, and revoke invitations.' },
-    { scope: 'manage_settings', label: 'Manage settings', description: 'Edit weekly schedule and global app settings.' },
+    { scope: 'manage_projects', label: 'Manage projects', description: 'Create project boards, manage team assignments, and review join requests.' },
+    { scope: 'manage_settings', label: 'Forms & settings', description: 'Edit submission forms, weekly schedule, and global app settings.' },
     { scope: 'view_audit_logs', label: 'View audit logs', description: 'Inspect tracked admin and security activity.' },
+    { scope: 'view_admin_access', label: 'View delegated access', description: 'See who currently has delegated admin access and when it expires.' },
+    { scope: 'manage_admin_access', label: 'Manage delegated access', description: 'Create, update, and revoke delegated admin grants.' },
 ];
 
 function formatAdminScopeLabel(scope: AdminAccessScope) {
@@ -39,14 +44,18 @@ export default function AdminUsersPage() {
     const grantUserId = useId();
     const grantNoteId = useId();
     const grantExpiryId = useId();
+    const editUserNameId = useId();
+    const editUserTeamId = useId();
 
     const [users, setUsers] = useState<User[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
     const [roleFilter, setRoleFilter] = useState<string>('');
     const [statusFilter, setStatusFilter] = useState<string>('');
-    const [editingUser, setEditingUser] = useState<User | null>(null);
+    const [roleEditorUser, setRoleEditorUser] = useState<User | null>(null);
+    const [profileEditorUser, setProfileEditorUser] = useState<User | null>(null);
     const [saving, setSaving] = useState(false);
+    const [profileForm, setProfileForm] = useState({ name: '', team: '' });
     const [showFilters, setShowFilters] = useState(false);
 
     // Invite State
@@ -63,15 +72,30 @@ export default function AdminUsersPage() {
         note: '',
         expiresAt: '',
     });
-    const canViewUsers = hasAdminScope('view_users') || hasAdminScope('manage_users');
-    const canManageUsers = hasAdminScope('manage_users');
+    const canEditUsers = hasAdminScope('edit_users') || hasAdminScope('manage_users');
+    const canManageUserStatus = hasAdminScope('manage_user_status') || hasAdminScope('manage_users');
+    const canManageUserRoles = hasAdminScope('manage_user_roles');
+    const canViewUsers = hasAdminScope('view_users') || canEditUsers || canManageUserStatus || canManageUserRoles;
+    const canManageUsers = canEditUsers || canManageUserStatus || canManageUserRoles;
     const canManageInvites = hasAdminScope('manage_invites');
+    const canViewAdminAccess = hasAdminScope('view_admin_access') || hasAdminScope('manage_admin_access');
+    const canManageAdminAccess = hasAdminScope('manage_admin_access');
+    const canLoadUsers = canViewUsers || canManageAdminAccess;
+    const grantableScopeOptions = ADMIN_SCOPE_OPTIONS.filter((option) => {
+        if (isAdmin) {
+            return true;
+        }
+        if (option.scope === 'manage_admin_access' || option.scope === 'manage_user_roles' || option.scope === 'manage_user_status') {
+            return false;
+        }
+        return hasAdminScope(option.scope);
+    });
 
     useEffect(() => {
-        if (!authLoading && (!isAuthenticated || !canAccessAdminPortal || (!canViewUsers && !canManageInvites))) {
+        if (!authLoading && (!isAuthenticated || !canAccessAdminPortal || (!canViewUsers && !canManageInvites && !canViewAdminAccess))) {
             navigate('/dashboard');
         }
-    }, [authLoading, isAuthenticated, canAccessAdminPortal, canManageInvites, canViewUsers, navigate]);
+    }, [authLoading, isAuthenticated, canAccessAdminPortal, canManageInvites, canViewAdminAccess, canViewUsers, navigate]);
 
     const loadUsers = useCallback(async () => {
         try {
@@ -109,7 +133,7 @@ export default function AdminUsersPage() {
 
     useEffect(() => {
         if (isAuthenticated && canAccessAdminPortal) {
-            if (canViewUsers) {
+            if (canLoadUsers) {
                 void loadUsers();
             } else {
                 setUsers([]);
@@ -119,13 +143,13 @@ export default function AdminUsersPage() {
             } else {
                 setInvites([]);
             }
-            if (isAdmin) {
+            if (canViewAdminAccess) {
                 void loadGrants();
             } else {
                 setGrants([]);
             }
         }
-    }, [isAuthenticated, canAccessAdminPortal, canManageInvites, canViewUsers, isAdmin, loadUsers, loadInvites, loadGrants]);
+    }, [isAuthenticated, canAccessAdminPortal, canLoadUsers, canManageInvites, canViewAdminAccess, loadUsers, loadInvites, loadGrants]);
 
     const handleResendInvite = async (email: string) => {
         try {
@@ -189,7 +213,7 @@ export default function AdminUsersPage() {
             setSaving(true);
             await api.updateUser(userId, { role: newRole as 'volunteer' | 'team_lead' | 'admin' });
             await loadUsers();
-            setEditingUser(null);
+            setRoleEditorUser(null);
         } catch (err) {
             console.error('Failed to update role:', err);
             alert('Failed to update user role');
@@ -211,11 +235,50 @@ export default function AdminUsersPage() {
         }
     };
 
+    const openUserProfileEditor = (user: User) => {
+        setProfileEditorUser(user);
+        setProfileForm({
+            name: user.name,
+            team: user.team ?? '',
+        });
+    };
+
+    const closeUserProfileEditor = () => {
+        setProfileEditorUser(null);
+        setProfileForm({ name: '', team: '' });
+    };
+
+    const handleSaveUserProfile = async (event: React.FormEvent) => {
+        event.preventDefault();
+        if (!profileEditorUser) return;
+
+        const trimmedName = profileForm.name.trim();
+        if (trimmedName.length < 2) {
+            alert('Please enter a full name with at least 2 characters.');
+            return;
+        }
+
+        try {
+            setSaving(true);
+            await api.updateUser(profileEditorUser.id, {
+                name: trimmedName,
+                team: profileForm.team.trim(),
+            });
+            await loadUsers();
+            closeUserProfileEditor();
+        } catch (err) {
+            console.error('Failed to update user profile:', err);
+            alert(err instanceof Error ? err.message : 'Failed to update user profile');
+        } finally {
+            setSaving(false);
+        }
+    };
+
     const openGrantModal = () => {
         const defaultUser = users.find((user) => user.role !== 'admin' && user.is_active);
         setGrantForm({
             userId: defaultUser?.id ?? '',
-            scopes: ['view_users'],
+            scopes: grantableScopeOptions[0] ? [grantableScopeOptions[0].scope] : [],
             note: '',
             expiresAt: '',
         });
@@ -281,7 +344,7 @@ export default function AdminUsersPage() {
 
     const hasActiveFilters = Boolean(searchTerm || roleFilter || statusFilter);
 
-    if (authLoading || !isAuthenticated || !canAccessAdminPortal || (!canViewUsers && !canManageInvites)) {
+    if (authLoading || !isAuthenticated || !canAccessAdminPortal || (!canViewUsers && !canManageInvites && !canViewAdminAccess)) {
         return (
             <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--color-bg-primary)' }}>
                 <LoadingSpinner size={50} />
@@ -311,9 +374,13 @@ export default function AdminUsersPage() {
                         <p style={{ color: '#64748b', margin: 0, fontSize: '1.05rem', maxWidth: '600px' }}>
                             {isAdmin
                                 ? 'View the team directory, delegate admin access, and manage system access.'
-                                : canManageUsers
-                                    ? 'Manage users using the admin scopes granted to you.'
-                                    : 'View the directory and the areas you were delegated to handle.'}
+                                : canManageAdminAccess
+                                    ? 'Review and manage delegated access alongside the admin areas assigned to you.'
+                                    : canManageUsers
+                                        ? 'Manage user details using the exact admin scopes granted to you.'
+                                        : canViewAdminAccess
+                                            ? 'Review delegated access grants and the access areas assigned across the portal.'
+                                            : 'View the directory and the areas you were delegated to handle.'}
                         </p>
                     </div>
 
@@ -361,11 +428,11 @@ export default function AdminUsersPage() {
                                     </select>
                                 </div>
                                 <div style={{ minWidth: '150px' }}>
-                                    <label className="form-label" htmlFor={statusFilterId} style={{ fontSize: '0.8rem', color: '#64748b' }}>Status</label>
+                                    <label className="form-label" htmlFor={statusFilterId} style={{ fontSize: '0.8rem', color: '#64748b' }}>Account State</label>
                                     <select id={statusFilterId} className="form-select" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setTimeout(loadUsers, 0); }} style={{ background: 'white' }}>
-                                        <option value="">All Statuses</option>
-                                        <option value="active">Active</option>
-                                        <option value="inactive">Inactive</option>
+                                        <option value="">All Accounts</option>
+                                        <option value="active">Enabled</option>
+                                        <option value="inactive">Disabled</option>
                                     </select>
                                 </div>
                                 {hasActiveFilters && (
@@ -393,12 +460,23 @@ export default function AdminUsersPage() {
                                             <th scope="col" style={{ padding: '1rem', color: '#64748b', fontWeight: 700, fontSize: '0.75rem', letterSpacing: '0.05em' }}>Team</th>
                                             <th scope="col" style={{ padding: '1rem', color: '#64748b', fontWeight: 700, fontSize: '0.75rem', letterSpacing: '0.05em' }}>Stats</th>
                                             <th scope="col" style={{ padding: '1rem', color: '#64748b', fontWeight: 700, fontSize: '0.75rem', letterSpacing: '0.05em' }}>Last Login</th>
-                                            <th scope="col" style={{ padding: '1rem', color: '#64748b', fontWeight: 700, fontSize: '0.75rem', letterSpacing: '0.05em' }}>Status</th>
+                                            <th scope="col" style={{ padding: '1rem', color: '#64748b', fontWeight: 700, fontSize: '0.75rem', letterSpacing: '0.05em' }}>Portal Status</th>
                                             <th scope="col" style={{ padding: '1rem 1.5rem', textAlign: 'right', color: '#64748b', fontWeight: 700, fontSize: '0.75rem', letterSpacing: '0.05em' }}>Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {filteredUsers.map((user) => (
+                                        {filteredUsers.map((user) => {
+                                            const hasLoggedIn = !user.invited_only && Boolean(user.last_login);
+                                            const lastLoginLabel = user.invited_only
+                                                ? 'Pending login'
+                                                : user.last_login
+                                                    ? format(parseISO(user.last_login), 'MMM d, yyyy')
+                                                    : 'Never';
+                                            const canAdjustUserRole = canManageUserRoles && (isAdmin || user.role !== 'admin');
+                                            const canToggleUserStatus = canManageUserStatus && (isAdmin || user.role !== 'admin');
+                                            const hasRowActions = canEditUsers || canAdjustUserRole || canToggleUserStatus;
+
+                                            return (
                                             <tr key={user.id} style={{ borderBottom: '1px solid #f1f5f9', transition: 'background 0.2s' }} className="hover:bg-slate-50">
                                                 <td style={{ padding: '1rem 1.5rem' }}>
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -410,11 +488,11 @@ export default function AdminUsersPage() {
                                                 </td>
                                                 <td style={{ padding: '1rem', color: '#475569', fontSize: '0.9rem' }}>{user.email}</td>
                                                 <td style={{ padding: '1rem' }}>
-                                                    {canManageUsers && editingUser?.id === user.id ? (
-                                                        <select className="form-select" value={editingUser.role} onChange={(e) => handleRoleChange(user.id, e.target.value)} disabled={saving} style={{ minWidth: '120px', padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}>
+                                                    {canAdjustUserRole && roleEditorUser?.id === user.id ? (
+                                                        <select className="form-select" value={roleEditorUser.role} onChange={(e) => handleRoleChange(user.id, e.target.value)} disabled={saving} style={{ minWidth: '120px', padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}>
                                                             <option value="volunteer">Volunteer</option>
                                                             <option value="team_lead">Team Lead</option>
-                                                            <option value="admin">Admin</option>
+                                                            {isAdmin && <option value="admin">Admin</option>}
                                                         </select>
                                                     ) : (
                                                         <span style={{ display: 'inline-flex', alignItems: 'center' }}>
@@ -432,46 +510,64 @@ export default function AdminUsersPage() {
                                                     {user.total_submissions} subs · {user.total_hours.toFixed(1)}h
                                                 </td>
                                                 <td style={{ padding: '1rem', color: '#64748b', fontSize: '0.85rem' }}>
-                                                    {user.last_login ? format(parseISO(user.last_login), 'MMM d, yyyy') : 'Never'}
+                                                    {lastLoginLabel}
                                                 </td>
                                                 <td style={{ padding: '1rem' }}>
-                                                    {user.is_active ? (
+                                                    {!user.is_active ? (
+                                                        <span style={{ color: '#b91c1c', display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.85rem', fontWeight: 600 }}>
+                                                            <UserX size={16} /> Inactive
+                                                        </span>
+                                                    ) : hasLoggedIn ? (
                                                         <span style={{ color: '#15803d', display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.85rem', fontWeight: 600 }}>
                                                             <UserCheck size={16} /> Active
                                                         </span>
                                                     ) : (
-                                                        <span style={{ color: '#b91c1c', display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.85rem', fontWeight: 600 }}>
-                                                            <UserX size={16} /> Inactive
+                                                        <span style={{ color: '#b45309', display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.85rem', fontWeight: 600 }}>
+                                                            <Mail size={16} /> Pending login
                                                         </span>
                                                     )}
                                                 </td>
                                                 <td style={{ padding: '0.75rem 1.5rem', textAlign: 'right' }}>
-                                                    {canManageUsers ? (
+                                                    {hasRowActions ? (
                                                         <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-                                                            <Button
-                                                                variant="ghost"
-                                                                size="sm"
-                                                                onClick={() => editingUser?.id === user.id ? setEditingUser(null) : setEditingUser(user)}
-                                                                style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
-                                                            >
-                                                                {editingUser?.id === user.id ? 'Cancel' : 'Edit Role'}
-                                                            </Button>
-                                                            <Button
-                                                                variant="ghost"
-                                                                size="sm"
-                                                                onClick={() => handleStatusChange(user.id, !user.is_active)}
-                                                                disabled={saving}
-                                                                style={{ color: user.is_active ? '#dc2626' : '#16a34a', fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
-                                                            >
-                                                                {user.is_active ? 'Deactivate' : 'Activate'}
-                                                            </Button>
+                                                            {canEditUsers && (
+                                                                <Button
+                                                                    variant="ghost"
+                                                                    size="sm"
+                                                                    onClick={() => openUserProfileEditor(user)}
+                                                                    style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
+                                                                >
+                                                                    Edit Details
+                                                                </Button>
+                                                            )}
+                                                            {canAdjustUserRole && (
+                                                                <Button
+                                                                    variant="ghost"
+                                                                    size="sm"
+                                                                    onClick={() => roleEditorUser?.id === user.id ? setRoleEditorUser(null) : setRoleEditorUser(user)}
+                                                                    style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
+                                                                >
+                                                                    {roleEditorUser?.id === user.id ? 'Cancel' : 'Edit Role'}
+                                                                </Button>
+                                                            )}
+                                                            {canToggleUserStatus && (
+                                                                <Button
+                                                                    variant="ghost"
+                                                                    size="sm"
+                                                                    onClick={() => handleStatusChange(user.id, !user.is_active)}
+                                                                    disabled={saving}
+                                                                    style={{ color: user.is_active ? '#dc2626' : '#16a34a', fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
+                                                                >
+                                                                    {user.is_active ? 'Deactivate' : 'Activate'}
+                                                                </Button>
+                                                            )}
                                                         </div>
                                                     ) : (
                                                         <span style={{ color: '#94a3b8', fontSize: '0.85rem' }}>View only</span>
                                                     )}
                                                 </td>
                                             </tr>
-                                        ))}
+                                        )})}
                                     </tbody>
                                 </table>
                             </div>
@@ -545,16 +641,22 @@ export default function AdminUsersPage() {
                         </div>
                     )}
 
-                    {isAdmin && (
+                    {canViewAdminAccess && (
                         <div style={{ background: 'white', borderRadius: '16px', border: '1px solid #e2e8f0', boxShadow: '0 4px 15px rgba(0,0,0,0.02)', padding: '1.5rem', marginTop: '2rem' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
                                 <div>
                                     <h3 style={{ fontSize: '1.1rem', fontWeight: 800, margin: '0 0 0.25rem 0', color: '#0f172a' }}>Delegated Admin Access</h3>
-                                    <p style={{ color: '#64748b', margin: 0, fontSize: '0.9rem' }}>Grant temporary admin-portal scopes without promoting someone to a full admin role.</p>
+                                    <p style={{ color: '#64748b', margin: 0, fontSize: '0.9rem' }}>
+                                        {canManageAdminAccess
+                                            ? 'Grant temporary admin-portal scopes without promoting someone to a full admin role.'
+                                            : 'Review current delegated admin grants, scope coverage, and expiry windows.'}
+                                    </p>
                                 </div>
-                                <Button size="sm" onClick={openGrantModal}>
-                                    <Plus size={16} style={{ marginRight: '0.4rem' }} /> Grant Access
-                                </Button>
+                                {canManageAdminAccess && (
+                                    <Button size="sm" onClick={openGrantModal} disabled={grantableScopeOptions.length === 0}>
+                                        <Plus size={16} style={{ marginRight: '0.4rem' }} /> Grant Access
+                                    </Button>
+                                )}
                             </div>
 
                             {grants.length > 0 ? (
@@ -593,9 +695,13 @@ export default function AdminUsersPage() {
                                                         {grant.expires_at ? format(parseISO(grant.expires_at), 'MMM d, yyyy h:mm a') : 'No expiry'}
                                                     </td>
                                                     <td style={{ padding: '0.75rem 1.5rem', textAlign: 'right' }}>
-                                                        <Button variant="ghost" size="sm" style={{ color: '#dc2626', fontSize: '0.8rem' }} onClick={() => handleRevokeGrant(grant.id)}>
-                                                            Revoke
-                                                        </Button>
+                                                        {canManageAdminAccess ? (
+                                                            <Button variant="ghost" size="sm" style={{ color: '#dc2626', fontSize: '0.8rem' }} onClick={() => handleRevokeGrant(grant.id)}>
+                                                                Revoke
+                                                            </Button>
+                                                        ) : (
+                                                            <span style={{ color: '#94a3b8', fontSize: '0.85rem' }}>View only</span>
+                                                        )}
                                                     </td>
                                                 </tr>
                                             ))}
@@ -662,7 +768,53 @@ export default function AdminUsersPage() {
                 </div>
             )}
 
-            {isAdmin && showGrantModal && (
+            {profileEditorUser && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(15, 23, 42, 0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem', animation: 'fadeIn 0.2s ease-out' }}>
+                    <div role="dialog" aria-modal="true" aria-labelledby="edit-user-title" style={{ backgroundColor: 'white', borderRadius: '20px', padding: '2rem', width: '100%', maxWidth: '520px', boxShadow: '0 20px 40px rgba(0,0,0,0.2)', animation: 'slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+                            <div>
+                                <h2 id="edit-user-title" style={{ fontSize: '1.4rem', fontWeight: 800, margin: 0, color: '#0f172a' }}>Edit User Details</h2>
+                                <p style={{ margin: '0.45rem 0 0', color: '#64748b', fontSize: '0.9rem', lineHeight: 1.5 }}>
+                                    Update the selected user's profile details without changing their access level.
+                                </p>
+                            </div>
+                            <button type="button" aria-label="Close user profile dialog" onClick={closeUserProfileEditor} style={{ color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer', padding: '0.5rem', borderRadius: '50%', display: 'flex' }} className="hover:bg-slate-100">
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <form onSubmit={handleSaveUserProfile}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                                <div>
+                                    <label className="form-label" htmlFor={editUserNameId} style={{ fontWeight: 700, color: '#334155' }}>Full Name</label>
+                                    <input
+                                        id={editUserNameId}
+                                        className="form-input"
+                                        value={profileForm.name}
+                                        onChange={(event) => setProfileForm({ ...profileForm, name: event.target.value })}
+                                        required
+                                    />
+                                </div>
+                                <div>
+                                    <label className="form-label" htmlFor={editUserTeamId} style={{ fontWeight: 700, color: '#334155' }}>Team</label>
+                                    <input
+                                        id={editUserTeamId}
+                                        className="form-input"
+                                        value={profileForm.team}
+                                        onChange={(event) => setProfileForm({ ...profileForm, team: event.target.value })}
+                                        placeholder="Optional team name"
+                                    />
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1rem', paddingTop: '1.5rem', borderTop: '1px solid #e2e8f0' }}>
+                                    <Button type="button" variant="ghost" onClick={closeUserProfileEditor}>Cancel</Button>
+                                    <Button type="submit" isLoading={saving}>Save Details</Button>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {canManageAdminAccess && showGrantModal && (
                 <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(15, 23, 42, 0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem', animation: 'fadeIn 0.2s ease-out' }}>
                     <div
                         role="dialog"
@@ -709,7 +861,7 @@ export default function AdminUsersPage() {
                                 <div>
                                     <label className="form-label" style={{ fontWeight: 700, color: '#334155' }}>Admin Scopes</label>
                                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '0.75rem', marginTop: '0.5rem' }}>
-                                        {ADMIN_SCOPE_OPTIONS.map((option) => (
+                                        {grantableScopeOptions.map((option) => (
                                             <label key={option.scope} style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start', padding: '0.9rem', border: '1px solid #e2e8f0', borderRadius: '12px', cursor: 'pointer', minHeight: '100%' }}>
                                                 <input
                                                     type="checkbox"
@@ -724,6 +876,11 @@ export default function AdminUsersPage() {
                                             </label>
                                         ))}
                                     </div>
+                                    {grantableScopeOptions.length === 0 && (
+                                        <p style={{ marginTop: '0.75rem', color: '#b45309', fontSize: '0.85rem' }}>
+                                            Your current delegated access does not include any grantable scopes.
+                                        </p>
+                                    )}
                                 </div>
 
                                 <div>
@@ -753,7 +910,7 @@ export default function AdminUsersPage() {
 
                             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', padding: '1rem 2rem 1.5rem', borderTop: '1px solid #e2e8f0', background: '#ffffff' }}>
                                 <Button type="button" variant="ghost" onClick={() => setShowGrantModal(false)}>Cancel</Button>
-                                <Button type="submit" isLoading={isSavingGrant}>Save Access Grant</Button>
+                                <Button type="submit" isLoading={isSavingGrant} disabled={grantableScopeOptions.length === 0}>Save Access Grant</Button>
                             </div>
                         </form>
                     </div>

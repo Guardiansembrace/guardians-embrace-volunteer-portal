@@ -12,28 +12,38 @@ import uuid
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# Configure logging FIRST, before any other imports
-log_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
-os.makedirs(log_dir, exist_ok=True)
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
-# Configure root logger with both file and console output
-root_logger = logging.getLogger()
-root_logger.setLevel(logging.DEBUG)
 
-# File handler
-file_handler = logging.FileHandler(os.path.join(log_dir, "app.log"))
-file_handler.setLevel(logging.DEBUG)
-file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-file_handler.setFormatter(file_formatter)
+def configure_logging() -> None:
+    """Configure application logging once, preferring stdout for cloud runtimes."""
+    root_logger = logging.getLogger()
+    if root_logger.handlers:
+        return
 
-# Console handler with flush
-console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setLevel(logging.DEBUG)
-console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-console_handler.setFormatter(console_formatter)
+    root_logger.setLevel(logging.DEBUG)
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
-root_logger.addHandler(file_handler)
-root_logger.addHandler(console_handler)
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.DEBUG)
+    console_handler.setFormatter(formatter)
+    root_logger.addHandler(console_handler)
+
+    is_lambda = bool(os.getenv("AWS_LAMBDA_FUNCTION_NAME"))
+    if not is_lambda and _env_flag("LOG_TO_FILE"):
+        log_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        file_handler = logging.FileHandler(os.path.join(log_dir, "app.log"))
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(formatter)
+        root_logger.addHandler(file_handler)
+
+
+configure_logging()
 
 logger = logging.getLogger(__name__)
 logger.info("=" * 60)

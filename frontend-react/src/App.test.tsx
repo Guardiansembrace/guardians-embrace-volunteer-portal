@@ -291,6 +291,27 @@ describe('App routing', () => {
         expect(await screen.findByText('Mock Admin Users Page')).toBeInTheDocument();
     });
 
+    it('renders delegated access oversight for the users route when admin-access viewing is granted', async () => {
+        authMock.state = {
+            user: { id: 'delegate-2b', profile_complete: true, role: 'volunteer' },
+            isLoading: false,
+            isAuthenticated: true,
+            isAdmin: false,
+            isTeamLead: false,
+            canManageOperations: false,
+            canAccessAdminPortal: true,
+            isDelegatedAdmin: true,
+            adminScopes: ['view_admin_access'],
+            hasAdminScope: vi.fn((scope: string) => scope === 'view_admin_access'),
+            needsName: false,
+        };
+        window.history.pushState({}, '', '/admin/users');
+
+        render(<App />);
+
+        expect(await screen.findByText('Mock Admin Users Page')).toBeInTheDocument();
+    });
+
     it('redirects delegates away from settings without the settings scope', async () => {
         authMock.state = {
             user: { id: 'delegate-3', profile_complete: true, role: 'team_lead' },
