@@ -1228,9 +1228,8 @@ textarea:focus {
   }
 
   /* Make the secondary nav scrollable on mobile */
-  .navbar-wrapper>div:nth-child(2)>.container {
+  .navbar-wrapper>nav>.container {
     overflow-x: auto;
-    padding-bottom: 0.25rem;
     -webkit-overflow-scrolling: touch;
     flex-wrap: nowrap !important;
   }
