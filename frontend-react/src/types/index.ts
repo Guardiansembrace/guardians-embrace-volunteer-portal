@@ -19,7 +19,7 @@ export interface User {
     total_hours: number;
     total_submissions: number;
     created_at: string;
-    last_login: string;
+    last_login: string | null;
 }
 
 // ============================================================================
@@ -126,7 +126,7 @@ export interface UploadedFile {
 export interface DriveStatus {
     configured: boolean;
     message: string;
-    storage_type?: 'drive' | 'local';
+    storage_type?: 'shared_drive' | 's3' | 'local';
 }
 
 // ============================================================================

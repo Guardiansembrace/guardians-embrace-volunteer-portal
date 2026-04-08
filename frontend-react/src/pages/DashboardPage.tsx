@@ -1,12 +1,22 @@
-import { useEffect, useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { useAuth } from '../lib/AuthContext';
+import { useCallback, useEffect, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { format, parseISO, differenceInDays, differenceInHours, isPast } from 'date-fns';
+import {
+    AlertCircle,
+    ArrowRight,
+    Clock3,
+    Edit3,
+    FileText,
+    Flame,
+    PlusCircle,
+    Shield,
+    Timer,
+} from 'lucide-react';
+import { useAuth } from '../lib/useAuth';
 import { api } from '../lib/api';
-import type { WeekInfo, SubmissionSummary, HoursTrendPoint, AttendanceData } from '../lib/api';
+import type { SubmissionSummary, WeekInfo } from '../lib/api';
 import { Navbar, Footer } from '../components/Layout';
-import { Card, CardHeader, CardTitle, Button, Badge, StatCard, LoadingSpinner, EmptyState } from '../components/ui';
-import { Clock, FileText, Calendar, AlertCircle, CheckCircle, PlusCircle, Edit, Users, Timer, Flame, BarChart3, Mail, CalendarCheck } from 'lucide-react';
-import { format, parseISO, differenceInHours, differenceInDays, isPast } from 'date-fns';
+import { Badge, Button, Card, CardHeader, CardTitle, EmptyState, LoadingSpinner, StatCard } from '../components/ui';
 
 interface AdminStats {
     week_id: string;
@@ -21,25 +31,156 @@ interface AdminStats {
     };
 }
 
-interface UserStats {
-    total_users: number;
-    active_users: number;
-    inactive_users: number;
-    volunteers: number;
-    admins: number;
+interface CurrentWeekAction {
+    title: string;
+    description: string;
+    buttonLabel: string;
+    buttonVariant: 'primary' | 'outline';
+    href: string;
+    secondaryHref?: string;
+    secondaryLabel?: string;
+}
+
+function getCurrentWeekAction(weekInfo: WeekInfo | null): CurrentWeekAction {
+    if (!weekInfo) {
+        return {
+            title: 'Open your submissions',
+            description: 'We are loading your current week details.',
+            buttonLabel: 'Open submissions',
+            buttonVariant: 'outline',
+            href: '/submissions',
+        };
+    }
+
+    const weekNumber = weekInfo.week_id.split('-W')[1];
+    const now = new Date();
+    const windowStart = parseISO(weekInfo.submission_window_start);
+
+    if (weekInfo.has_submission && weekInfo.submission_id) {
+        const isDraft = weekInfo.submission_status === 'draft';
+
+        return {
+            title: isDraft ? `Continue your W${weekNumber} draft` : `Review your W${weekNumber} update`,
+            description: isDraft
+                ? 'Pick up where you left off and submit when you are ready.'
+                : 'Your update is already in. Reopen it if you want to review the details.',
+            buttonLabel: isDraft ? 'Continue update' : 'View update',
+            buttonVariant: isDraft ? 'primary' : 'outline',
+            href: `/submissions/${weekInfo.submission_id}`,
+            secondaryHref: '/submissions',
+            secondaryLabel: 'Open history',
+        };
+    }
+
+    if (weekInfo.submission_deadline) {
+        const deadline = parseISO(weekInfo.submission_deadline);
+
+        if (!weekInfo.is_submission_window_open && now < windowStart) {
+            return {
+                title: `W${weekNumber} opens soon`,
+                description: `Submissions open on ${format(windowStart, 'EEE, MMM d h:mm a')}.`,
+                buttonLabel: 'View history',
+                buttonVariant: 'outline',
+                href: '/submissions',
+            };
+        }
+
+        if (isPast(deadline)) {
+            if (!weekInfo.allow_late_submissions) {
+                return {
+                    title: `W${weekNumber} window closed`,
+                    description: 'This week\'s update window has ended. Reach out to an admin if it needs to reopen.',
+                    buttonLabel: 'View history',
+                    buttonVariant: 'outline',
+                    href: '/submissions',
+                };
+            }
+
+            return {
+                title: `Start your W${weekNumber} update`,
+                description: 'The deadline passed, but you can still submit a late check-in.',
+                buttonLabel: `Start W${weekNumber}`,
+                buttonVariant: 'primary',
+                href: '/submissions/new',
+                secondaryHref: '/submissions',
+                secondaryLabel: 'View history',
+            };
+        }
+
+        const hoursLeft = differenceInHours(deadline, new Date());
+        const daysLeft = differenceInDays(deadline, new Date());
+        const urgencyCopy = hoursLeft < 24
+            ? `Deadline coming up soon: ${hoursLeft}h left.`
+            : `${daysLeft}d ${hoursLeft % 24}h left before this week's deadline.`;
+
+        return {
+            title: `Start your W${weekNumber} update`,
+            description: urgencyCopy,
+            buttonLabel: `Start W${weekNumber}`,
+            buttonVariant: 'primary',
+            href: '/submissions/new',
+            secondaryHref: '/submissions',
+            secondaryLabel: 'View history',
+        };
+    }
+
+    return {
+        title: `Start your W${weekNumber} update`,
+        description: 'Capture your past, present, and next steps in one place.',
+        buttonLabel: `Start W${weekNumber}`,
+        buttonVariant: 'primary',
+        href: '/submissions/new',
+        secondaryHref: '/submissions',
+        secondaryLabel: 'View history',
+    };
+}
+
+function getDeadlineSummary(weekInfo: WeekInfo | null): string {
+    if (!weekInfo?.submission_deadline) {
+        return 'No deadline information yet';
+    }
+
+    const windowStart = parseISO(weekInfo.submission_window_start);
+    const deadline = parseISO(weekInfo.submission_deadline);
+    const now = new Date();
+
+    if (!weekInfo.is_submission_window_open && now < windowStart) {
+        return `Opens ${format(windowStart, 'EEE, MMM d h:mm a')}`;
+    }
+
+    if (isPast(deadline)) {
+        return weekInfo.allow_late_submissions
+            ? `Late submissions are allowed after ${format(deadline, 'EEE, MMM d h:mm a')}`
+            : `Deadline passed on ${format(deadline, 'EEE, MMM d h:mm a')}`;
+    }
+
+    const hoursLeft = differenceInHours(deadline, new Date());
+    const daysLeft = differenceInDays(deadline, new Date());
+
+    if (hoursLeft < 24) {
+        return `${hoursLeft}h remaining`;
+    }
+
+    return `${daysLeft}d ${hoursLeft % 24}h remaining`;
 }
 
 export default function DashboardPage() {
     const navigate = useNavigate();
-    const { user, isLoading: authLoading, isAuthenticated, isAdmin } = useAuth();
+    const {
+        user,
+        isLoading: authLoading,
+        isAuthenticated,
+        isAdmin,
+        isTeamLead,
+        canAccessAdminPortal,
+        hasAdminScope,
+        isDelegatedAdmin,
+    } = useAuth();
 
     const [weekInfo, setWeekInfo] = useState<WeekInfo | null>(null);
     const [submissions, setSubmissions] = useState<SubmissionSummary[]>([]);
     const [allSubmissions, setAllSubmissions] = useState<SubmissionSummary[]>([]);
     const [adminStats, setAdminStats] = useState<AdminStats | null>(null);
-    const [userStats, setUserStats] = useState<UserStats | null>(null);
-    const [hoursTrend, setHoursTrend] = useState<HoursTrendPoint[]>([]);
-    const [attendance, setAttendance] = useState<AttendanceData | null>(null);
     const [reminderSending, setReminderSending] = useState(false);
     const [reminderResult, setReminderResult] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(true);
@@ -50,15 +191,46 @@ export default function DashboardPage() {
         }
     }, [authLoading, isAuthenticated, navigate]);
 
+    const loadData = useCallback(async () => {
+        try {
+            setIsLoading(true);
+
+            const [week, mySubmissions] = await Promise.all([
+                api.getCurrentWeekInfo(),
+                api.getMySubmissions(),
+            ]);
+
+            setWeekInfo(week);
+            setSubmissions(mySubmissions);
+
+            if (canAccessAdminPortal && hasAdminScope('review_submissions')) {
+                const [stats, teamSubmissions] = await Promise.all([
+                    api.getSubmissionStats(),
+                    api.getAllSubmissions({ limit: 5 }),
+                ]);
+                setAdminStats(stats);
+                setAllSubmissions(teamSubmissions);
+            } else {
+                setAdminStats(null);
+                setAllSubmissions([]);
+            }
+        } catch (err) {
+            console.error('Failed to load data:', err);
+        } finally {
+            setIsLoading(false);
+        }
+    }, [canAccessAdminPortal, hasAdminScope]);
+
     useEffect(() => {
         if (isAuthenticated) {
-            loadData();
+            void loadData();
         }
-    }, [isAuthenticated, isAdmin]);
+    }, [isAuthenticated, loadData]);
 
     const handleSendReminders = async () => {
         setReminderSending(true);
         setReminderResult(null);
+
         try {
             const result = await api.sendReminders();
             setReminderResult(result.message);
@@ -70,37 +242,6 @@ export default function DashboardPage() {
         }
     };
 
-    const loadData = async () => {
-        try {
-            const [week, subs, trend, att] = await Promise.all([
-                api.getCurrentWeekInfo(),
-                api.getMySubmissions(),
-                api.getHoursTrend(8),
-                api.getAttendance(12),
-            ]);
-            setWeekInfo(week);
-            setSubmissions(subs);
-            setHoursTrend(trend);
-            setAttendance(att);
-
-            // Load admin-specific data
-            if (isAdmin) {
-                const [stats, uStats, allSubs] = await Promise.all([
-                    api.getSubmissionStats(),
-                    api.getUserStats(),
-                    api.getAllSubmissions({ limit: 10 }),
-                ]);
-                setAdminStats(stats);
-                setUserStats(uStats);
-                setAllSubmissions(allSubs);
-            }
-        } catch (err) {
-            console.error('Failed to load data:', err);
-        } finally {
-            setIsLoading(false);
-        }
-    };
-
     if (authLoading || !isAuthenticated) {
         return (
             <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -109,555 +250,250 @@ export default function DashboardPage() {
         );
     }
 
-    const recentSubmissions = submissions.slice(0, 5);
+    const weekNumber = weekInfo?.week_id.split('-W')[1];
+    const weekAction = getCurrentWeekAction(weekInfo);
+    const recentSubmissions = submissions.slice(0, 4);
+    const recentTeamSubmissions = allSubmissions.slice(0, 5);
+    const hasSubmissionStatus = weekInfo?.has_submission && weekInfo.submission_status;
+    const canEditUsers = hasAdminScope('edit_users') || hasAdminScope('manage_users');
+    const canManageUserStatus = hasAdminScope('manage_user_status') || hasAdminScope('manage_users');
+    const canManageUserRoles = hasAdminScope('manage_user_roles');
+    const canViewUsers = hasAdminScope('view_users') || canEditUsers || canManageUserStatus || canManageUserRoles;
+    const canViewAdminAccess = hasAdminScope('view_admin_access') || hasAdminScope('manage_admin_access');
+    const canManageAdminAccess = hasAdminScope('manage_admin_access');
+    const hasUserAccess = canViewUsers || hasAdminScope('manage_invites') || canViewAdminAccess;
+    const hasSubmissionAccess = hasAdminScope('review_submissions');
+    const canSendReminders = hasAdminScope('send_reminders');
 
     return (
         <div className="page-wrapper">
             <Navbar />
-            <main className="main-content">
-                <div className="container">
-                    {/* Welcome Header */}
-                    <div className="flex-between" style={{
-                        marginBottom: '3rem',
-                        padding: '2.5rem 1.5rem',
-                        background: 'var(--gradient-dark)',
-                        borderRadius: 'var(--radius-xl)',
-                        color: 'white',
-                        boxShadow: 'var(--shadow-lg)',
-                        position: 'relative',
-                        overflow: 'hidden'
-                    }}>
-                        {/* Decorative glow */}
-                        <div style={{ position: 'absolute', top: '-50%', right: '-10%', width: '400px', height: '400px', background: 'radial-gradient(circle, rgba(212,175,55,0.15) 0%, rgba(0,0,0,0) 70%)', borderRadius: '50%' }} />
-
-                        <div style={{ position: 'relative', zIndex: 1 }}>
-                            <h1 style={{ marginBottom: '0.75rem', color: 'white', display: 'flex', alignItems: 'center', fontSize: '2.5rem', letterSpacing: '-0.02em' }}>
-                                Welcome back, <span style={{ color: 'var(--color-primary-gold)', marginLeft: '0.5rem' }}>{user?.name}</span>
-                                {isAdmin && <span className="badge badge-admin" style={{ marginLeft: '1rem', verticalAlign: 'middle', fontSize: '0.8rem' }}>Admin</span>}
-                            </h1>
-                            <p style={{ color: '#E5E7EB', margin: 0, fontSize: '1.1rem', maxWidth: '600px', lineHeight: 1.6 }}>
-                                {isAdmin
-                                    ? "Here's your command center for overseeing all volunteer activity."
-                                    : "Thank you for your dedication to our mission. Here's your impact overview."
-                                }
+            <main id="main-content" className="main-content">
+                <div className="container dashboard-shell">
+                    <section className="dashboard-hero">
+                        <div className="dashboard-hero-copy">
+                            <p className="dashboard-eyebrow">
+                                {isAdmin ? 'Admin' : isDelegatedAdmin ? 'Delegated admin' : isTeamLead ? 'Team lead' : 'Volunteer'}
                             </p>
-                        </div>
-                        <div className="hidden-mobile" style={{ position: 'relative', zIndex: 1, padding: '1.25rem', background: 'rgba(255,255,255,0.03)', borderRadius: 'var(--radius-lg)', border: '1px solid rgba(255,255,255,0.05)', backdropFilter: 'blur(10px)', textAlign: 'right' }}>
-                            <p style={{ margin: 0, color: 'var(--color-text-muted)', fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Today</p>
-                            <p style={{ margin: '0.25rem 0 0 0', color: 'var(--color-primary-gold)', fontWeight: 600, fontSize: '1.2rem' }}>{format(new Date(), 'EEEE, MMMM do')}</p>
-                        </div>
-                    </div>
-
-                    {/* Admin Stats Section */}
-                    {isAdmin && adminStats && userStats && (
-                        <>
-                            {/* Admin Overview Stats */}
-                            <div style={{ marginBottom: '2rem' }}>
-                                <h2 style={{ fontSize: '1.25rem', marginBottom: '1rem', color: 'var(--color-text-secondary)' }}>
-                                    📊 Organization Overview
-                                </h2>
-                                <div className="grid grid-cols-4" style={{ gap: '1.5rem' }}>
-                                    <StatCard
-                                        value={userStats.total_users}
-                                        label="Total Volunteers"
-                                        icon={<Users size={28} />}
-                                    />
-                                    <StatCard
-                                        value={adminStats.this_week.total_submitted}
-                                        label="Submitted This Week"
-                                        icon={<FileText size={28} />}
-                                    />
-                                    <StatCard
-                                        value={adminStats.this_week.total_hours.toFixed(1)}
-                                        label="Hours This Week"
-                                        icon={<Clock size={28} />}
-                                    />
-                                    <StatCard
-                                        value={adminStats.this_week.blockers_count}
-                                        label="Blockers Reported"
-                                        icon={<AlertCircle size={28} />}
-                                    />
-                                </div>
-                            </div>
-
-                            {/* Admin Quick Stats Row */}
-                            <div className="grid grid-cols-4" style={{ gap: '1.5rem', marginBottom: '3rem' }}>
-                                <div style={{
-                                    background: 'var(--color-info-bg)',
-                                    padding: '1.5rem',
-                                    borderRadius: 'var(--radius-lg)',
-                                    textAlign: 'center',
-                                    border: '1px solid rgba(59, 130, 246, 0.1)',
-                                    transition: 'transform 0.2s',
-                                    cursor: 'default'
-                                }} className="hover-lift">
-                                    <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--color-info)', lineHeight: 1 }}>{userStats.active_users}</div>
-                                    <div style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)', fontWeight: 600, marginTop: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Active Users</div>
-                                </div>
-                                <div style={{
-                                    background: 'var(--color-warning-bg)',
-                                    padding: '1.5rem',
-                                    borderRadius: 'var(--radius-lg)',
-                                    textAlign: 'center',
-                                    border: '1px solid rgba(245, 158, 11, 0.1)'
-                                }}>
-                                    <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--color-warning)', lineHeight: 1 }}>{adminStats.this_week.total_drafts}</div>
-                                    <div style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)', fontWeight: 600, marginTop: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Drafts Pending</div>
-                                </div>
-                                <div style={{
-                                    background: 'var(--color-success-bg)',
-                                    padding: '1.5rem',
-                                    borderRadius: 'var(--radius-lg)',
-                                    textAlign: 'center',
-                                    border: '1px solid rgba(16, 185, 129, 0.1)'
-                                }}>
-                                    <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--color-success)', lineHeight: 1 }}>{adminStats.all_time.total_submissions}</div>
-                                    <div style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)', fontWeight: 600, marginTop: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>All-Time Subs</div>
-                                </div>
-                                <div style={{
-                                    background: userStats.inactive_users > 0 ? 'var(--color-error-bg)' : 'var(--color-success-bg)',
-                                    padding: '1.5rem',
-                                    borderRadius: 'var(--radius-lg)',
-                                    textAlign: 'center',
-                                    border: `1px solid ${userStats.inactive_users > 0 ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)'}`
-                                }}>
-                                    <div style={{ fontSize: '2rem', fontWeight: 800, color: userStats.inactive_users > 0 ? 'var(--color-error)' : 'var(--color-success)', lineHeight: 1 }}>{userStats.inactive_users}</div>
-                                    <div style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)', fontWeight: 600, marginTop: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Inactive Users</div>
-                                </div>
-                            </div>
-
-                            {/* All Recent Submissions (Admin View) */}
-                            <Card style={{ marginBottom: '2rem' }}>
-                                <CardHeader>
-                                    <div className="flex justify-between items-center">
-                                        <CardTitle>📋 Recent Volunteer Submissions</CardTitle>
-                                        <Link to="/admin/submissions">
-                                            <Button variant="primary" size="sm">View All Submissions</Button>
-                                        </Link>
-                                    </div>
-                                </CardHeader>
-
-                                {isLoading ? (
-                                    <LoadingSpinner size={30} />
-                                ) : allSubmissions.length > 0 ? (
-                                    <div className="table-wrapper">
-                                        <table className="table">
-                                            <thead>
-                                                <tr>
-                                                    <th>Volunteer</th>
-                                                    <th>Week</th>
-                                                    <th>Hours</th>
-                                                    <th>Status</th>
-                                                    <th>Blockers</th>
-                                                    <th></th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {allSubmissions.map((sub) => (
-                                                    <tr key={sub.id}>
-                                                        <td><strong>{sub.user_name}</strong></td>
-                                                        <td>{sub.week_id}</td>
-                                                        <td>{sub.total_hours.toFixed(1)}h</td>
-                                                        <td>
-                                                            <Badge variant={sub.status as 'draft' | 'submitted' | 'reviewed'}>
-                                                                {sub.status}
-                                                            </Badge>
-                                                            {sub.is_late && (
-                                                                <span style={{ marginLeft: '0.35rem', fontSize: '0.65rem', color: 'var(--color-warning)', fontWeight: 600 }}>LATE</span>
-                                                            )}
-                                                        </td>
-                                                        <td>
-                                                            {sub.has_blockers ? (
-                                                                <span style={{ color: 'var(--color-error)' }}>⚠️ Yes</span>
-                                                            ) : (
-                                                                <span style={{ color: 'var(--color-text-muted)' }}>—</span>
-                                                            )}
-                                                        </td>
-                                                        <td>
-                                                            <Link to={`/submissions/${sub.id}`}>
-                                                                <Button variant="ghost" size="sm">View</Button>
-                                                            </Link>
-                                                        </td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                ) : (
-                                    <EmptyState
-                                        icon={<FileText size={48} />}
-                                        title="No Submissions Yet"
-                                        description="No volunteers have submitted updates yet."
-                                    />
+                            <h1 className="dashboard-hero-title">
+                                Welcome, {user?.name.split(' ')[0] || 'User'}
+                            </h1>
+                            <div className="dashboard-pill-row" style={{ marginTop: '0.75rem' }}>
+                                {weekNumber && <span className="dashboard-pill">Week {weekNumber}</span>}
+                                {hasSubmissionStatus && (
+                                    <Badge variant={weekInfo.submission_status as 'draft' | 'submitted' | 'reviewed'}>
+                                        {weekInfo.submission_status}
+                                    </Badge>
                                 )}
-                            </Card>
-
-                            {/* Admin Quick Links */}
-                            <div className="grid grid-cols-3" style={{ gap: '1rem', marginBottom: '2rem' }}>
-                                <Link to="/admin/users" style={{ textDecoration: 'none' }}>
-                                    <Card style={{ cursor: 'pointer', transition: 'transform 0.2s' }}>
-                                        <div className="flex items-center gap-4">
-                                            <div style={{
-                                                width: 50,
-                                                height: 50,
-                                                background: 'var(--color-primary-gold)',
-                                                borderRadius: 'var(--radius-md)',
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                color: 'white'
-                                            }}>
-                                                <Users size={24} />
-                                            </div>
-                                            <div>
-                                                <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Manage Users</h3>
-                                                <p style={{ margin: 0, color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>
-                                                    View all volunteers, change roles, manage access
-                                                </p>
-                                            </div>
-                                        </div>
-                                    </Card>
-                                </Link>
-                                <Link to="/admin/submissions" style={{ textDecoration: 'none' }}>
-                                    <Card style={{ cursor: 'pointer', transition: 'transform 0.2s' }}>
-                                        <div className="flex items-center gap-4">
-                                            <div style={{
-                                                width: 50,
-                                                height: 50,
-                                                background: 'var(--color-primary-gold)',
-                                                borderRadius: 'var(--radius-md)',
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                color: 'white'
-                                            }}>
-                                                <FileText size={24} />
-                                            </div>
-                                            <div>
-                                                <h3 style={{ margin: 0, fontSize: '1.1rem' }}>All Submissions</h3>
-                                                <p style={{ margin: 0, color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>
-                                                    View, filter, and review all volunteer submissions
-                                                </p>
-                                            </div>
-                                        </div>
-                                    </Card>
-                                </Link>
-                                <Card
-                                    style={{ cursor: reminderSending ? 'wait' : 'pointer', transition: 'transform 0.2s', opacity: reminderSending ? 0.7 : 1 }}
-                                    onClick={reminderSending ? undefined : handleSendReminders}
-                                >
-                                    <div className="flex items-center gap-4">
-                                        <div style={{
-                                            width: 50,
-                                            height: 50,
-                                            background: 'var(--color-primary-gold)',
-                                            borderRadius: 'var(--radius-md)',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            color: 'white'
-                                        }}>
-                                            <Mail size={24} />
-                                        </div>
-                                        <div>
-                                            <h3 style={{ margin: 0, fontSize: '1.1rem' }}>
-                                                {reminderSending ? 'Sending...' : 'Send Reminders'}
-                                            </h3>
-                                            <p style={{ margin: 0, color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>
-                                                {reminderResult || 'Email volunteers who haven\'t submitted'}
-                                            </p>
-                                        </div>
-                                    </div>
-                                </Card>
                             </div>
-                        </>
-                    )}
+                        </div>
 
-                    {/* Personal Stats Grid (shown to everyone) */}
-                    <div style={{ marginBottom: '1rem' }}>
-                        {isAdmin && (
-                            <h2 style={{ fontSize: '1.25rem', marginBottom: '1rem', color: 'var(--color-text-secondary)' }}>
-                                👤 Your Personal Stats
-                            </h2>
-                        )}
-                    </div>
-                    {/* Quick Stats Grid */}
-                    <div className="grid grid-cols-2 md:grid-cols-5" style={{ gap: '1rem', marginBottom: '2rem' }}>
-                        <StatCard value={user?.total_hours.toFixed(1) || '0'} label="Total Hours" icon={<Clock size={28} />} />
-                        <StatCard value={user?.total_submissions || 0} label="Submissions" icon={<FileText size={28} />} />
-                        <StatCard value={`${user?.submission_streak || 0}w`} label="Streak 🔥" icon={<Flame size={28} />} />
-                        <StatCard value={weekInfo?.week_id || '--'} label="Current Week" icon={<Calendar size={28} />} />
-                        <StatCard
-                            value={weekInfo?.has_submission ? '✓' : '—'}
-                            label="This Week"
-                            icon={weekInfo?.has_submission ? <CheckCircle size={28} /> : <PlusCircle size={28} />}
-                        />
-                    </div>
+                        <div className="dashboard-hero-panel">
+                            <p className="dashboard-panel-label">This week</p>
+                            <h2 className="dashboard-panel-title">{weekAction.title}</h2>
+                            <p className="dashboard-panel-copy">{weekAction.description}</p>
 
-                    {/* Hours Trend Chart */}
-                    {hoursTrend.length > 0 && (() => {
-                        const maxHours = Math.max(...hoursTrend.map(p => p.total_hours), 1);
-                        return (
-                            <Card style={{ marginBottom: '1.5rem' }}>
-                                <CardHeader>
-                                    <div className="flex justify-between items-center">
-                                        <CardTitle style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                            <BarChart3 size={20} />
-                                            Hours Trend
-                                        </CardTitle>
-                                        <span style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)' }}>Last {hoursTrend.length} weeks</span>
+                            {weekInfo && (
+                                <div className="dashboard-panel-meta">
+                                    <div className="dashboard-panel-meta-item">
+                                        <Clock3 size={16} />
+                                        <span>{getDeadlineSummary(weekInfo)}</span>
                                     </div>
-                                </CardHeader>
-                                <div style={{ display: 'flex', alignItems: 'flex-end', gap: '0.5rem', height: 120, padding: '0 0.5rem' }}>
-                                    {hoursTrend.map((point) => {
-                                        const pct = maxHours > 0 ? (point.total_hours / maxHours) * 100 : 0;
-                                        const isCurrentWeek = point.week_id === weekInfo?.week_id;
-                                        return (
-                                            <div
-                                                key={point.week_id}
-                                                style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}
-                                                title={`${point.week_id}: ${point.total_hours.toFixed(1)}h${point.submitted ? '' : ' (not submitted)'}`}
-                                            >
-                                                <span style={{ fontSize: '0.65rem', fontWeight: 600, color: point.total_hours > 0 ? 'var(--color-text-primary)' : 'var(--color-text-muted)' }}>
-                                                    {point.total_hours > 0 ? `${point.total_hours.toFixed(1)}` : ''}
-                                                </span>
-                                                <div style={{
-                                                    width: '100%',
-                                                    maxWidth: 48,
-                                                    height: `${Math.max(pct, 4)}%`,
-                                                    borderRadius: 'var(--radius-sm) var(--radius-sm) 0 0',
-                                                    background: isCurrentWeek
-                                                        ? 'var(--color-primary-gold)'
-                                                        : point.submitted
-                                                            ? 'var(--color-success)'
-                                                            : point.total_hours > 0
-                                                                ? 'var(--color-warning)'
-                                                                : 'var(--color-border)',
-                                                    transition: 'height 0.4s ease',
-                                                    opacity: point.total_hours > 0 ? 1 : 0.4,
-                                                }} />
-                                                <span style={{
-                                                    fontSize: '0.6rem',
-                                                    color: isCurrentWeek ? 'var(--color-primary-gold)' : 'var(--color-text-muted)',
-                                                    fontWeight: isCurrentWeek ? 700 : 400,
-                                                    whiteSpace: 'nowrap',
-                                                }}>
-                                                    W{point.week_id.split('-W')[1]}
-                                                </span>
-                                            </div>
-                                        );
-                                    })}
+                                    <div className="dashboard-panel-meta-item">
+                                        <Timer size={16} />
+                                        <span>
+                                            {format(parseISO(weekInfo.week_start), 'MMM d')} - {format(parseISO(weekInfo.week_end), 'MMM d')}
+                                        </span>
+                                    </div>
                                 </div>
-                                <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', marginTop: '0.75rem', paddingBottom: '0.25rem' }}>
-                                    <span style={{ fontSize: '0.65rem', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                                        <span style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--color-success)', display: 'inline-block' }} /> Submitted
-                                    </span>
-                                    <span style={{ fontSize: '0.65rem', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                                        <span style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--color-primary-gold)', display: 'inline-block' }} /> This Week
-                                    </span>
-                                    <span style={{ fontSize: '0.65rem', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                                        <span style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--color-warning)', display: 'inline-block' }} /> Draft
-                                    </span>
-                                </div>
-                            </Card>
-                        );
-                    })()}
+                            )}
 
-                    {/* Weekly Attendance Grid */}
-                    {attendance && attendance.grid.length > 0 && (
-                        <Card style={{ marginBottom: '1.5rem' }}>
+                            <div className="dashboard-action-row">
+                                <Link to={weekAction.href}>
+                                    <Button variant={weekAction.buttonVariant}>
+                                        {weekInfo?.has_submission ? <Edit3 size={18} /> : <PlusCircle size={18} />}
+                                        {weekAction.buttonLabel}
+                                    </Button>
+                                </Link>
+                                {weekAction.secondaryHref && weekAction.secondaryLabel && (
+                                    <Link to={weekAction.secondaryHref}>
+                                        <Button variant="secondary">
+                                            <FileText size={18} />
+                                            {weekAction.secondaryLabel}
+                                        </Button>
+                                    </Link>
+                                )}
+                            </div>
+                        </div>
+                    </section>
+
+                    {canAccessAdminPortal && adminStats && (
+                        <Card className="dashboard-admin-card">
                             <CardHeader>
-                                <div className="flex justify-between items-center">
+                                <div className="dashboard-section-head">
                                     <CardTitle style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                        <CalendarCheck size={20} />
-                                        Weekly Check-in History
+                                        <Shield size={20} />
+                                        Admin portal overview
                                     </CardTitle>
-                                    <span style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)' }}>
-                                        {attendance.attendance_rate}% attendance ({attendance.submitted_weeks}/{attendance.total_weeks - 1} weeks)
-                                    </span>
                                 </div>
                             </CardHeader>
-                            <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', padding: '0 0.5rem 0.75rem' }}>
-                                {attendance.grid.map((cell) => {
-                                    const colors: Record<string, string> = {
-                                        reviewed: 'var(--color-success)',
-                                        submitted: '#3b82f6',
-                                        draft: 'var(--color-warning)',
-                                        none: 'var(--color-border)',
-                                    };
-                                    return (
-                                        <div
-                                            key={cell.week_id}
-                                            title={`${cell.week_id}: ${cell.status === 'none' ? 'No submission' : `${cell.status} (${cell.total_hours.toFixed(1)}h)`}`}
-                                            style={{
-                                                width: 28,
-                                                height: 28,
-                                                borderRadius: 'var(--radius-sm)',
-                                                background: colors[cell.status] || colors.none,
-                                                opacity: cell.status === 'none' ? 0.3 : 1,
-                                                border: cell.is_current ? '2px solid var(--color-primary-gold)' : '1px solid transparent',
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                fontSize: '0.55rem',
-                                                fontWeight: 600,
-                                                color: cell.status === 'none' ? 'var(--color-text-muted)' : 'white',
-                                                cursor: 'default',
-                                                transition: 'transform 0.15s ease',
-                                            }}
-                                        >
-                                            {cell.week_id.split('-W')[1]}
-                                        </div>
-                                    );
-                                })}
+
+                            <div className="dashboard-admin-grid">
+                                <AdminMetric
+                                    label="Submitted this week"
+                                    value={adminStats.this_week.total_submitted}
+                                    tone="default"
+                                />
+                                <AdminMetric
+                                    label="Drafts open"
+                                    value={adminStats.this_week.total_drafts}
+                                    tone="warning"
+                                />
+                                <AdminMetric
+                                    label="Blockers reported"
+                                    value={adminStats.this_week.blockers_count}
+                                    tone={adminStats.this_week.blockers_count > 0 ? 'danger' : 'default'}
+                                />
                             </div>
-                            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center', paddingBottom: '0.5rem' }}>
-                                <span style={{ fontSize: '0.65rem', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                                    <span style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--color-success)', display: 'inline-block' }} /> Reviewed
-                                </span>
-                                <span style={{ fontSize: '0.65rem', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                                    <span style={{ width: 8, height: 8, borderRadius: 2, background: '#3b82f6', display: 'inline-block' }} /> Submitted
-                                </span>
-                                <span style={{ fontSize: '0.65rem', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                                    <span style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--color-warning)', display: 'inline-block' }} /> Draft
-                                </span>
-                                <span style={{ fontSize: '0.65rem', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                                    <span style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--color-border)', display: 'inline-block', opacity: 0.4 }} /> Missed
-                                </span>
+
+                            {reminderResult && (
+                                <div className={`dashboard-feedback ${reminderResult.toLowerCase().includes('failed') ? 'dashboard-feedback-error' : ''}`}>
+                                    {reminderResult}
+                                </div>
+                            )}
+
+                            <div className="dashboard-action-row">
+                                {hasSubmissionAccess && (
+                                    <Link to="/admin/submissions">
+                                        <Button variant="primary">
+                                            <FileText size={18} />
+                                            Review submissions
+                                        </Button>
+                                    </Link>
+                                )}
+                                {hasUserAccess && (
+                                    <Link to="/admin/users">
+                                        <Button variant="secondary">
+                                            <Shield size={18} />
+                                            {canManageAdminAccess
+                                                ? 'Manage access'
+                                                : (canEditUsers || canManageUserStatus || canManageUserRoles)
+                                                    ? 'Manage users'
+                                                    : hasAdminScope('manage_invites')
+                                                        ? 'Manage invites'
+                                                        : canViewAdminAccess
+                                                            ? 'View access'
+                                                            : 'View users'}
+                                        </Button>
+                                    </Link>
+                                )}
+                                {canSendReminders && (
+                                    <Button variant="outline" onClick={handleSendReminders} isLoading={reminderSending}>
+                                        <AlertCircle size={18} />
+                                        Send reminders
+                                    </Button>
+                                )}
                             </div>
                         </Card>
                     )}
-                    {/* Main Content Layout */}
-                    <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-3" style={{ gap: '1.5rem' }}>
-                        {/* Current Week Card */}
-                        <Card style={{
-                            background: weekInfo?.has_submission ? 'white' : 'var(--color-primary-gold-light)',
-                            border: weekInfo?.has_submission ? '1px solid var(--color-border)' : '1px solid rgba(212, 175, 55, 0.3)'
-                        }}>
+
+                    {(!canAccessAdminPortal || !hasSubmissionAccess) && (
+                        <section className="dashboard-section">
+                            <div className="dashboard-section-head" style={{ marginBottom: '1rem' }}>
+                                <h2 className="dashboard-section-title">Your overview</h2>
+                            </div>
+
+                            <div className="dashboard-summary-grid">
+                                <StatCard
+                                    value={user?.total_submissions ?? 0}
+                                    label="Total submissions"
+                                    icon={<FileText size={24} />}
+                                />
+                                <StatCard
+                                    value={(user?.total_hours ?? 0).toFixed(1)}
+                                    label="Total hours"
+                                    icon={<Clock3 size={24} />}
+                                />
+                                <StatCard
+                                    value={user?.submission_streak ?? 0}
+                                    label="Current streak"
+                                    icon={<Flame size={24} />}
+                                />
+                            </div>
+                        </section>
+                    )}
+
+                    {canAccessAdminPortal && hasSubmissionAccess && (
+                        <Card>
                             <CardHeader>
-                                <div className="flex justify-between items-center">
-                                    <CardTitle>This Week's Update</CardTitle>
-                                    {weekInfo?.has_submission && (
-                                        <Badge variant={weekInfo.submission_status as 'draft' | 'submitted' | 'reviewed'}>
-                                            {weekInfo.submission_status}
-                                        </Badge>
-                                    )}
+                                <div className="dashboard-section-head flex-between">
+                                    <CardTitle>Team recent updates</CardTitle>
+                                    <Link to="/admin/submissions">
+                                        <Button variant="ghost" size="sm">
+                                            View all <ArrowRight size={16} />
+                                        </Button>
+                                    </Link>
                                 </div>
                             </CardHeader>
 
                             {isLoading ? (
                                 <LoadingSpinner size={30} />
-                            ) : weekInfo ? (
-                                <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                                    <div style={{ marginBottom: '1.5rem' }}>
-                                        <p style={{ color: 'var(--color-text-muted)', marginBottom: '0.5rem', textTransform: 'uppercase', fontSize: '0.8rem', letterSpacing: '0.05em', fontWeight: 600 }}>
-                                            Week {weekInfo.week_id.split('-W')[1]}
-                                        </p>
-                                        <p style={{ color: 'var(--color-text-primary)', margin: 0, fontSize: '1.1rem', fontWeight: 500 }}>
-                                            {format(parseISO(weekInfo.week_start), 'MMMM do')} — {format(parseISO(weekInfo.week_end), 'MMMM do, yyyy')}
-                                        </p>
-                                    </div>
-
-                                    <div style={{
-                                        background: 'white',
-                                        padding: '1.25rem',
-                                        borderRadius: 'var(--radius-md)',
-                                        marginBottom: '2rem',
-                                        border: '1px solid var(--color-border)',
-                                        boxShadow: 'var(--shadow-sm)'
-                                    }}>
-                                        {weekInfo.submission_deadline && !isPast(parseISO(weekInfo.submission_deadline)) ? (() => {
-                                            const deadline = parseISO(weekInfo.submission_deadline);
-                                            const hoursLeft = differenceInHours(deadline, new Date());
-                                            const daysLeft = differenceInDays(deadline, new Date());
-                                            const isUrgent = hoursLeft < 24 && !weekInfo.has_submission;
-                                            return (
-                                                <div className="flex items-center gap-4">
-                                                    <div style={{
-                                                        width: 48, height: 48, borderRadius: '50%',
-                                                        background: isUrgent ? 'var(--color-error-bg)' : 'var(--color-info-bg)',
-                                                        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
-                                                    }}>
-                                                        <Timer size={24} style={{ color: isUrgent ? 'var(--color-error)' : 'var(--color-info)' }} />
-                                                    </div>
-                                                    <div>
-                                                        <p style={{ margin: 0, fontWeight: 700, fontSize: '1rem', color: isUrgent ? 'var(--color-error)' : 'var(--color-text-primary)' }}>
-                                                            {isUrgent
-                                                                ? `Urgent: ${hoursLeft}h left to submit!`
-                                                                : `${daysLeft}d ${hoursLeft % 24}h until deadline`
-                                                            }
-                                                        </p>
-                                                        <p style={{ margin: '0.25rem 0 0', fontSize: '0.85rem', color: 'var(--color-text-muted)' }}>
-                                                            Due: {format(deadline, 'EEEE, MMM d · h:mm a')}
-                                                        </p>
-                                                    </div>
-                                                </div>
-                                            );
-                                        })() : (
-                                            <div className="flex items-center gap-4">
-                                                <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'var(--color-success-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                                                    <CheckCircle size={24} style={{ color: 'var(--color-success)' }} />
-                                                </div>
-                                                <p style={{ color: 'var(--color-text-primary)', margin: 0, fontWeight: 500 }}>
-                                                    Track your past, present, and future work. You can submit updates anytime.
-                                                </p>
-                                            </div>
-                                        )}
-                                    </div>
-
-                                    <div className="flex gap-3" style={{ marginTop: 'auto' }}>
-                                        {weekInfo.has_submission ? (
-                                            <Link to={`/submissions/${weekInfo.submission_id}`} style={{ flex: 1 }}>
-                                                <Button variant="outline" className="w-full">
-                                                    <Edit size={18} style={{ marginRight: '0.5rem' }} />
-                                                    View / Edit Update
-                                                </Button>
-                                            </Link>
-                                        ) : (
-                                            <Link to="/submissions/new" style={{ flex: 1 }}>
-                                                <Button variant="primary" className="w-full" style={{ padding: '1rem', fontSize: '1.05rem' }}>
-                                                    <PlusCircle size={20} style={{ marginRight: '0.5rem' }} />
-                                                    Start W{weekInfo.week_id.split('-W')[1]} Update
-                                                </Button>
-                                            </Link>
-                                        )}
-                                    </div>
+                            ) : recentTeamSubmissions.length > 0 ? (
+                                <div className="table-wrapper">
+                                    <table className="table">
+                                        <caption className="sr-only">
+                                            Five recent volunteer submissions with status, hours, and whether they need attention.
+                                        </caption>
+                                        <thead>
+                                            <tr>
+                                                <th scope="col">Volunteer</th>
+                                                <th scope="col" className="hidden-mobile">Week</th>
+                                                <th scope="col">Status</th>
+                                                <th scope="col" className="hidden-mobile">Hours</th>
+                                                <th scope="col" className="hidden-mobile">Needs attention</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {recentTeamSubmissions.map((submission) => (
+                                                <tr key={submission.id}>
+                                                    <td><strong>{submission.user_name}</strong></td>
+                                                    <td className="hidden-mobile">{submission.week_id}</td>
+                                                    <td>
+                                                        <Badge variant={submission.status as 'draft' | 'submitted' | 'reviewed'}>
+                                                            {submission.status}
+                                                        </Badge>
+                                                    </td>
+                                                    <td className="hidden-mobile">{submission.total_hours.toFixed(1)}h</td>
+                                                    <td className="hidden-mobile">
+                                                        {submission.has_blockers ? (
+                                                            <span style={{ color: 'var(--color-error)', fontWeight: 600 }}>Blockers</span>
+                                                        ) : (
+                                                            <span style={{ color: 'var(--color-text-muted)' }}>None</span>
+                                                        )}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
                                 </div>
                             ) : (
-                                <p>Unable to load week information</p>
+                                <EmptyState
+                                    icon={<FileText size={48} />}
+                                    title="No team submissions yet"
+                                    description="Recent volunteer activity will appear here once check-ins start coming in."
+                                />
                             )}
                         </Card>
+                    )}
 
-                        {/* Quick Actions */}
-                        <Card>
-                            <CardHeader>
-                                <CardTitle>Quick Actions</CardTitle>
-                            </CardHeader>
-
-                            <div className="flex flex-col gap-3">
-                                <Link to="/submissions/new" style={{ width: '100%' }}>
-                                    <Button variant="primary" className="w-full">
-                                        <PlusCircle size={18} />
-                                        New Submission
-                                    </Button>
-                                </Link>
-                                <Link to="/submissions" style={{ width: '100%' }}>
-                                    <Button variant="secondary" className="w-full">
-                                        <FileText size={18} />
-                                        View History
-                                    </Button>
-                                </Link>
-                            </div>
-                        </Card>
-                    </div>
-
-                    {/* Recent Submissions */}
-                    <Card style={{ marginTop: '1.5rem' }}>
+                    <Card>
                         <CardHeader>
-                            <div className="flex justify-between items-center">
-                                <CardTitle>Your Recent Submissions</CardTitle>
+                            <div className="dashboard-section-head flex-between">
+                                <CardTitle>Your recent updates</CardTitle>
                                 <Link to="/submissions">
-                                    <Button variant="ghost" size="sm">View All →</Button>
+                                    <Button variant="ghost" size="sm">
+                                        View all <ArrowRight size={16} />
+                                    </Button>
                                 </Link>
                             </div>
                         </CardHeader>
@@ -667,34 +503,36 @@ export default function DashboardPage() {
                         ) : recentSubmissions.length > 0 ? (
                             <div className="table-wrapper">
                                 <table className="table">
+                                    <caption className="sr-only">
+                                        Your most recent submissions with status, hours, submission date, and a link to open each entry.
+                                    </caption>
                                     <thead>
                                         <tr>
-                                            <th>Week</th>
-                                            <th>Hours</th>
-                                            <th>Status</th>
-                                            <th>Submitted</th>
-                                            <th></th>
+                                            <th scope="col">Week</th>
+                                            <th scope="col">Status</th>
+                                            <th scope="col" className="hidden-mobile">Hours</th>
+                                            <th scope="col" className="hidden-mobile">Submitted</th>
+                                            <th scope="col">Action</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {recentSubmissions.map((sub) => (
-                                            <tr key={sub.id}>
-                                                <td><strong>{sub.week_id}</strong></td>
-                                                <td>{sub.total_hours.toFixed(1)}h</td>
+                                        {recentSubmissions.map((submission) => (
+                                            <tr key={submission.id}>
+                                                <td><strong>{submission.week_id}</strong></td>
                                                 <td>
-                                                    <Badge variant={sub.status as 'draft' | 'submitted' | 'reviewed'}>
-                                                        {sub.status}
+                                                    <Badge variant={submission.status as 'draft' | 'submitted' | 'reviewed'}>
+                                                        {submission.status}
                                                     </Badge>
-                                                    {sub.is_late && (
-                                                        <span style={{ marginLeft: '0.35rem', fontSize: '0.65rem', color: 'var(--color-warning)', fontWeight: 600 }}>LATE</span>
-                                                    )}
+                                                </td>
+                                                <td className="hidden-mobile">{submission.total_hours.toFixed(1)}h</td>
+                                                <td className="hidden-mobile">
+                                                    {submission.submitted_at
+                                                        ? format(parseISO(submission.submitted_at), 'MMM d, yyyy')
+                                                        : 'Not submitted'}
                                                 </td>
                                                 <td>
-                                                    {sub.submitted_at ? format(parseISO(sub.submitted_at), 'MMM d, yyyy') : '—'}
-                                                </td>
-                                                <td>
-                                                    <Link to={`/submissions/${sub.id}`}>
-                                                        <Button variant="ghost" size="sm">View</Button>
+                                                    <Link to={`/submissions/${submission.id}`}>
+                                                        <Button variant="ghost" size="sm">Open</Button>
                                                     </Link>
                                                 </td>
                                             </tr>
@@ -705,19 +543,53 @@ export default function DashboardPage() {
                         ) : (
                             <EmptyState
                                 icon={<FileText size={48} />}
-                                title="No Submissions Yet"
-                                description="Start tracking your volunteer work by creating your first submission."
-                                action={
+                                title="No submissions yet"
+                                description="Once you create a check-in, the latest entries will show up here."
+                                action={(
                                     <Link to="/submissions/new">
-                                        <Button variant="primary">Create First Submission</Button>
+                                        <Button variant="primary">Create first submission</Button>
                                     </Link>
-                                }
+                                )}
                             />
                         )}
                     </Card>
                 </div>
             </main>
             <Footer />
+        </div>
+    );
+}
+
+function AdminMetric({
+    label,
+    value,
+    tone,
+}: {
+    label: string;
+    value: number;
+    tone: 'default' | 'warning' | 'danger';
+}) {
+    const styleByTone = {
+        default: {
+            background: 'white',
+            valueColor: 'var(--color-text-primary)',
+        },
+        warning: {
+            background: 'var(--color-warning-bg)',
+            valueColor: '#b45309',
+        },
+        danger: {
+            background: 'var(--color-error-bg)',
+            valueColor: 'var(--color-error)',
+        },
+    };
+
+    const styles = styleByTone[tone];
+
+    return (
+        <div className="dashboard-admin-metric" style={{ background: styles.background }}>
+            <div className="dashboard-admin-value" style={{ color: styles.valueColor }}>{value}</div>
+            <div className="dashboard-admin-label">{label}</div>
         </div>
     );
 }

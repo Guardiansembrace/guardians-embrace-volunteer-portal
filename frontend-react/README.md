@@ -32,6 +32,7 @@ npm run dev             # starts at http://localhost:5173
 See `.env.example` for the full list. At minimum you need:
 
 ```env
-VITE_API_URL=http://localhost:8000
+VITE_DEV_PORT=5173
+VITE_API_PORT=8081
 VITE_GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 ```

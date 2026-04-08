@@ -39,7 +39,14 @@ class TestGetDriveService:
         import app.core.drive as drive_module
         drive_module._drive_service = None
 
-        service1 = get_drive_service()
-        service2 = get_drive_service()
-        # Both should be the same object (or both None if not configured)
+        mock_settings = MagicMock()
+        mock_settings.google_drive_shared_drive_id = "shared-drive-id"
+        mock_settings.google_application_credentials = ""
+        mock_settings.clean_google_drive_credentials_json = '{"type": "service_account"}'
+
+        with patch("app.core.drive.get_settings", return_value=mock_settings):
+            service1 = get_drive_service()
+            service2 = get_drive_service()
+
+        assert service1 is not None
         assert service1 is service2

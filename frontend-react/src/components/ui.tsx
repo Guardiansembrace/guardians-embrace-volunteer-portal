@@ -1,4 +1,5 @@
-import type { ReactNode, ButtonHTMLAttributes, InputHTMLAttributes, TextareaHTMLAttributes } from 'react';
+import { useId } from 'react';
+import type { ReactNode, ButtonHTMLAttributes, InputHTMLAttributes, TextareaHTMLAttributes, HTMLAttributes } from 'react';
 
 // Button Component
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -42,6 +43,7 @@ export function Button({
             className={`btn ${variantClasses[variant]} ${sizeClasses[size]} ${className}`}
             disabled={disabled || isLoading}
             style={dangerStyle}
+            aria-busy={isLoading || undefined}
             {...props}
         >
             {isLoading ? (
@@ -55,15 +57,14 @@ export function Button({
 }
 
 // Card Components
-interface CardProps {
+interface CardProps extends HTMLAttributes<HTMLDivElement> {
     children: ReactNode;
     className?: string;
     style?: React.CSSProperties;
-    onClick?: React.MouseEventHandler<HTMLDivElement>;
 }
 
-export function Card({ children, className = '', style, onClick }: CardProps) {
-    return <div className={`card ${className}`} style={style} onClick={onClick}>{children}</div>;
+export function Card({ children, className = '', style, ...props }: CardProps) {
+    return <div className={`card ${className}`} style={style} {...props}>{children}</div>;
 }
 
 export function CardHeader({ children, className = '' }: CardProps) {
@@ -116,11 +117,21 @@ interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
 }
 
 export function Input({ label, error, className = '', ...props }: InputProps) {
+    const generatedId = useId();
+    const inputId = props.id ?? generatedId;
+    const errorId = error ? `${inputId}-error` : undefined;
+
     return (
         <div className="form-group">
-            {label && <label className="form-label">{label}</label>}
-            <input className={`form-input ${className}`} {...props} />
-            {error && <p className="form-error">{error}</p>}
+            {label && <label className="form-label" htmlFor={inputId}>{label}</label>}
+            <input
+                id={inputId}
+                className={`form-input ${className}`}
+                aria-invalid={error ? true : undefined}
+                aria-describedby={errorId}
+                {...props}
+            />
+            {error && <p id={errorId} className="form-error">{error}</p>}
         </div>
     );
 }
@@ -132,11 +143,21 @@ interface TextareaProps extends TextareaHTMLAttributes<HTMLTextAreaElement> {
 }
 
 export function Textarea({ label, error, className = '', ...props }: TextareaProps) {
+    const generatedId = useId();
+    const textareaId = props.id ?? generatedId;
+    const errorId = error ? `${textareaId}-error` : undefined;
+
     return (
         <div className="form-group">
-            {label && <label className="form-label">{label}</label>}
-            <textarea className={`form-textarea ${className}`} {...props} />
-            {error && <p className="form-error">{error}</p>}
+            {label && <label className="form-label" htmlFor={textareaId}>{label}</label>}
+            <textarea
+                id={textareaId}
+                className={`form-textarea ${className}`}
+                aria-invalid={error ? true : undefined}
+                aria-describedby={errorId}
+                {...props}
+            />
+            {error && <p id={errorId} className="form-error">{error}</p>}
         </div>
     );
 }

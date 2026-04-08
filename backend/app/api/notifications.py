@@ -10,7 +10,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from typing import Optional
 
-from app.core.security import get_current_admin_user
+from app.core.admin_access import AdminAccessScope, require_admin_scopes
+from app.core.config import get_settings
+from app.core.rate_limit import rate_limit_by_user
 from app.core.email import send_email, build_reminder_html, is_email_configured
 from app.core.utils import get_week_id, get_submission_deadline
 from app.models.user import User, UserRole
@@ -32,7 +34,7 @@ class ReminderResponse(BaseModel):
 
 
 @router.get("/email-status")
-async def get_email_status(current_user: User = Depends(get_current_admin_user)):
+async def get_email_status(current_user: User = Depends(require_admin_scopes(AdminAccessScope.SEND_REMINDERS))):
     """Check if email is configured and ready to send."""
     configured = is_email_configured()
     return {
@@ -42,14 +44,18 @@ async def get_email_status(current_user: User = Depends(get_current_admin_user))
     }
 
 
-@router.post("/send-reminders", response_model=ReminderResponse)
+@router.post(
+    "/send-reminders",
+    response_model=ReminderResponse,
+    dependencies=[Depends(rate_limit_by_user("reminder_writes"))],
+)
 async def send_weekly_reminders(
     week_id: Optional[str] = None,
-    current_user: User = Depends(get_current_admin_user),
+    current_user: User = Depends(require_admin_scopes(AdminAccessScope.SEND_REMINDERS)),
 ):
     """
     Send email reminders to all active volunteers who haven't submitted yet.
-    Admin only.
+    Available to operations staff and admins.
     """
     if not is_email_configured():
         raise HTTPException(
@@ -58,13 +64,14 @@ async def send_weekly_reminders(
         )
 
     target_week = week_id or get_week_id()
-    deadline = get_submission_deadline()
+    deadline = get_submission_deadline(target_week)
     deadline_str = deadline.strftime("%A, %B %d at %I:%M %p")
+    settings = get_settings()
 
     # Get all active volunteers
     all_users = await User.find(
         User.is_active == True,
-        User.role != UserRole.ADMIN,
+        User.role == UserRole.VOLUNTEER,
     ).to_list()
 
     # Get submissions for this week
@@ -96,6 +103,7 @@ async def send_weekly_reminders(
             volunteer_name=user.name,
             week_id=target_week,
             deadline_str=deadline_str,
+            portal_url=settings.frontend_url,
         )
         emails_to_send.append((user.email, html))
 

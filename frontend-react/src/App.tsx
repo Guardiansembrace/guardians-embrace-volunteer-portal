@@ -1,6 +1,8 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { GoogleOAuthProvider } from '@react-oauth/google';
-import { AuthProvider, useAuth } from './lib/AuthContext';
+import type { AdminAccessScope } from './lib/api';
+import { AuthProvider } from './lib/AuthContext';
+import { useAuth } from './lib/useAuth';
 import { GOOGLE_CLIENT_ID } from './lib/config';
 
 // Pages
@@ -13,7 +15,9 @@ import AdminUsersPage from './pages/AdminUsersPage';
 import AdminSubmissionsPage from './pages/AdminSubmissionsPage';
 import AdminDashboardPage from './pages/AdminDashboardPage';
 import AdminSettingsPage from './pages/AdminSettingsPage';
+import AdminAuditPage from './pages/AdminAuditPage';
 import ProjectsPage from './pages/ProjectsPage';
+import ProjectDetailPage from './pages/ProjectDetailPage';
 
 // Protected Route wrapper — also gates on profile completion
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -33,9 +37,9 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-// Admin Route wrapper
-function AdminRoute({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isAdmin, isLoading, needsName } = useAuth();
+// Admin Portal Route wrapper
+function AdminPortalRoute({ children }: { children: React.ReactNode }) {
+  const { isAuthenticated, canAccessAdminPortal, isLoading, needsName } = useAuth();
 
   if (isLoading) {
     return (
@@ -47,7 +51,26 @@ function AdminRoute({ children }: { children: React.ReactNode }) {
 
   if (!isAuthenticated) return <Navigate to="/login" />;
   if (needsName) return <Navigate to="/set-name" />;
-  if (!isAdmin) return <Navigate to="/dashboard" />;
+  if (!canAccessAdminPortal) return <Navigate to="/dashboard" />;
+
+  return <>{children}</>;
+}
+
+function AdminScopeRoute({ children, scopes }: { children: React.ReactNode; scopes: AdminAccessScope[] }) {
+  const { isAuthenticated, isAdmin, hasAdminScope, canAccessAdminPortal, isLoading, needsName } = useAuth();
+
+  if (isLoading) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div className="spinner" />
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) return <Navigate to="/login" />;
+  if (needsName) return <Navigate to="/set-name" />;
+  if (!canAccessAdminPortal) return <Navigate to="/dashboard" />;
+  if (!isAdmin && !scopes.some((scope) => hasAdminScope(scope))) return <Navigate to="/admin" />;
 
   return <>{children}</>;
 }
@@ -78,14 +101,22 @@ function AppRoutes() {
       <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
       <Route path="/submissions" element={<ProtectedRoute><SubmissionsPage /></ProtectedRoute>} />
       <Route path="/projects" element={<ProtectedRoute><ProjectsPage /></ProtectedRoute>} />
+      <Route path="/projects/:projectId" element={<ProtectedRoute><ProjectDetailPage /></ProtectedRoute>} />
       <Route path="/submissions/new" element={<ProtectedRoute><NewSubmissionPage /></ProtectedRoute>} />
       <Route path="/submissions/:id" element={<ProtectedRoute><NewSubmissionPage /></ProtectedRoute>} />
 
-      {/* Admin Routes */}
-      <Route path="/admin" element={<AdminRoute><AdminDashboardPage /></AdminRoute>} />
-      <Route path="/admin/users" element={<AdminRoute><AdminUsersPage /></AdminRoute>} />
-      <Route path="/admin/submissions" element={<AdminRoute><AdminSubmissionsPage /></AdminRoute>} />
-      <Route path="/admin/settings" element={<AdminRoute><AdminSettingsPage /></AdminRoute>} />
+      <Route path="/admin" element={<AdminPortalRoute><AdminDashboardPage /></AdminPortalRoute>} />
+      <Route
+        path="/admin/users"
+        element={
+          <AdminScopeRoute scopes={['view_users', 'edit_users', 'manage_user_status', 'manage_user_roles', 'manage_invites', 'view_admin_access', 'manage_admin_access']}>
+            <AdminUsersPage />
+          </AdminScopeRoute>
+        }
+      />
+      <Route path="/admin/submissions" element={<AdminScopeRoute scopes={['review_submissions']}><AdminSubmissionsPage /></AdminScopeRoute>} />
+      <Route path="/admin/settings" element={<AdminScopeRoute scopes={['manage_settings']}><AdminSettingsPage /></AdminScopeRoute>} />
+      <Route path="/admin/audit" element={<AdminScopeRoute scopes={['view_audit_logs']}><AdminAuditPage /></AdminScopeRoute>} />
 
       <Route path="/" element={<Navigate to="/dashboard" />} />
       <Route path="*" element={<Navigate to="/dashboard" />} />

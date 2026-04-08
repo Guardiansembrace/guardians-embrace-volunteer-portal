@@ -8,30 +8,40 @@ from functools import lru_cache
 from pathlib import Path
 from typing import List, Optional, Union
 from pydantic import field_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def load_shared_config() -> dict:
     """Load shared configuration from the monorepo shared folder."""
-    config_path = Path(__file__).parent.parent.parent.parent / "shared" / "config.json"
-    if config_path.exists():
-        with open(config_path, "r") as f:
-            return json.load(f)
+    for parent in Path(__file__).resolve().parents:
+        config_path = parent / "shared" / "config.json"
+        if config_path.exists():
+            with open(config_path, "r", encoding="utf-8") as f:
+                return json.load(f)
     return {}
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
     
     # Application
     app_name: str = "Guardian's Embrace Volunteer Portal"
     app_version: str = "1.0.0"
     debug: bool = False
     api_prefix: str = "/api/v1"
+    monitoring_enabled: bool = True
+    frontend_error_ingest_enabled: bool = True
+    log_to_file: bool = False
     
     # Server
     host: str = "0.0.0.0"
-    port: int = 8000
+    port: int = 8081
     allowed_origins: Union[str, List[str]] = ["http://localhost:3000", "http://127.0.0.1:3000"]
     
     @field_validator("allowed_origins", mode="before")
@@ -42,6 +52,20 @@ class Settings(BaseSettings):
         elif isinstance(v, (list, str)):
             return v
         raise ValueError(v)
+
+    @field_validator("debug", mode="before")
+    @classmethod
+    def normalize_debug_flag(cls, value: Union[bool, str]) -> bool:
+        """Accept common environment-style debug values."""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on", "debug", "dev", "development"}:
+                return True
+            if normalized in {"0", "false", "no", "off", "release", "prod", "production"}:
+                return False
+        raise ValueError("Invalid debug flag")
     
     # MongoDB
     mongodb_uri: str = "mongodb://localhost:27017"
@@ -74,6 +98,15 @@ class Settings(BaseSettings):
     # Path to the service account credentials file (defaults to service-account.json)
     google_application_credentials: str = ""
 
+    # Frontend URL (used in outgoing emails)
+    frontend_url: str = "http://localhost:5173"
+    file_download_token_expire_minutes: int = 5
+
+    # AWS / S3
+    aws_region: str = "us-east-1"
+    aws_s3_bucket: str = ""
+    aws_public_assets_base_url: str = ""
+
     # SMTP Email (for reminders)
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = 587
@@ -81,6 +114,9 @@ class Settings(BaseSettings):
     smtp_password: str = ""  # For Gmail use an App Password
     smtp_from_email: str = ""
     smtp_from_name: str = "Guardian's Embrace"
+    smtp_use_starttls: bool = True
+    smtp_use_ssl: bool = False
+    smtp_validate_certs: bool = True
 
     @property
     def clean_google_drive_credentials_json(self) -> str:
@@ -89,11 +125,6 @@ class Settings(BaseSettings):
         if (val.startswith("'") and val.endswith("'")) or (val.startswith('"') and val.endswith('"')):
             return val[1:-1]
         return val
-    
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        extra = "ignore"
     
     @property
     def admin_email_list(self) -> List[str]:
