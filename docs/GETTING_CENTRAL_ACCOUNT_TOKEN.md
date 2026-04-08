@@ -11,8 +11,8 @@ Go to: https://developers.google.com/oauthplayground
 ### Step 2: Configure the Playground
 In the top-right corner, click the **gear icon** (⚙️) to access settings:
 - Check: "Use your own OAuth credentials"
-- **OAuth 2.0 Client ID**: `YOUR_CLIENT_ID_HERE`
-- **OAuth 2.0 Client Secret**: `YOUR_CLIENT_SECRET_HERE`
+- **OAuth 2.0 Client ID**: `<your-google-oauth-client-id>.apps.googleusercontent.com`
+- **OAuth 2.0 Client Secret**: `<your-google-oauth-client-secret>`
 - Click "Close"
 
 ### Step 3: Select Google Drive API Scope
@@ -38,7 +38,7 @@ After authorization, the playground will show tokens in "Step 2":
 ### Step 6: Copy the Refresh Token
 Copy the **Refresh Token** value (it looks like):
 ```
-1//0au0-VLysDhDcgYiAAA6AQnwf-l3Irpa0X5ev2C7u6EIceag8cFqDD2ilwaqt3x4ex3cmSCxWNtE2v_EFXu5fw_xXA
+1//example-refresh-token-value
 ```
 
 ### Step 7: Update .env File
@@ -49,7 +49,7 @@ GOOGLE_PERSONAL_ACCOUNT_TOKEN=<paste-refresh-token-here>
 
 Example:
 ```
-GOOGLE_PERSONAL_ACCOUNT_TOKEN=1//0au0-VLysDhDcgYiAAA6AQnwf-l3Irpa0X5ev2C7u6EIceag8cFqDD2ilwaqt3x4ex3cmSCxWNtE2v_EFXu5fw_xXA
+GOOGLE_PERSONAL_ACCOUNT_TOKEN=1//example-refresh-token-value
 ```
 
 ### Step 8: Restart Backend

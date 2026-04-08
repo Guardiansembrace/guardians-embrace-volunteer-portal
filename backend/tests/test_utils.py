@@ -5,7 +5,9 @@ Tests for utility functions.
 import pytest
 from datetime import datetime
 
-from app.core.utils import get_week_id, get_week_boundaries, is_submission_window_open
+from app.core.utils import can_submit_for_week, get_week_boundaries, get_week_id, is_submission_window_open
+from app.core.weekly_updates import get_weekly_update_settings, set_weekly_update_settings
+from app.models.settings import WeeklyUpdateSettings
 
 
 class TestGetWeekId:
@@ -73,3 +75,63 @@ class TestIsSubmissionWindowOpen:
         """Submission window is always open (no restrictions)."""
         result = is_submission_window_open()
         assert result is True
+
+    def test_scheduled_window_respects_open_and_close_times(self):
+        """Scheduled mode should only open between the configured start and deadline."""
+        original = get_weekly_update_settings()
+        try:
+            set_weekly_update_settings(
+                WeeklyUpdateSettings(
+                    window_mode="scheduled",
+                    submissions_open_day="friday",
+                    submissions_open_hour=9,
+                    submissions_open_minute=0,
+                    deadline_day="sunday",
+                    deadline_hour=20,
+                    deadline_minute=0,
+                    allow_late_submissions=False,
+                    timezone="America/New_York",
+                )
+            )
+
+            assert is_submission_window_open("2026-W12", datetime(2026, 3, 20, 8, 59)) is False
+            assert is_submission_window_open("2026-W12", datetime(2026, 3, 20, 9, 0)) is True
+            assert is_submission_window_open("2026-W12", datetime(2026, 3, 22, 20, 1)) is False
+        finally:
+            set_weekly_update_settings(original)
+
+    def test_can_submit_for_week_honors_late_submission_setting(self):
+        """Late submissions should remain available only when explicitly allowed."""
+        original = get_weekly_update_settings()
+        try:
+            set_weekly_update_settings(
+                WeeklyUpdateSettings(
+                    window_mode="scheduled",
+                    submissions_open_day="friday",
+                    submissions_open_hour=9,
+                    submissions_open_minute=0,
+                    deadline_day="sunday",
+                    deadline_hour=20,
+                    deadline_minute=0,
+                    allow_late_submissions=True,
+                    timezone="America/New_York",
+                )
+            )
+            assert can_submit_for_week("2026-W12", datetime(2026, 3, 22, 20, 1)) is True
+
+            set_weekly_update_settings(
+                WeeklyUpdateSettings(
+                    window_mode="scheduled",
+                    submissions_open_day="friday",
+                    submissions_open_hour=9,
+                    submissions_open_minute=0,
+                    deadline_day="sunday",
+                    deadline_hour=20,
+                    deadline_minute=0,
+                    allow_late_submissions=False,
+                    timezone="America/New_York",
+                )
+            )
+            assert can_submit_for_week("2026-W12", datetime(2026, 3, 22, 20, 1)) is False
+        finally:
+            set_weekly_update_settings(original)

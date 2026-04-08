@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Guardian's Embrace - Threat Model DFD & Scope</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-dark: #1e40af;
+            --bg: #f8fafc;
+            --surface: #ffffff;
+            --text: #0f172a;
+            --text-light: #64748b;
+            --border: #e2e8f0;
+            --focus: #3b82f6;
+        }
+
+        * { box-sizing: border-box; }
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            line-height: 1.6;
+            color: var(--text);
+            background: var(--bg);
+            margin: 0;
+            padding: 40px 20px;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: var(--surface);
+            padding: 60px;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.05);
+            border: 1px solid var(--border);
+        }
+
+        header {
+            border-bottom: 2px solid var(--primary);
+            margin-bottom: 40px;
+            padding-bottom: 20px;
+        }
+
+        h1 { margin: 0; font-size: 2.2rem; color: var(--text); font-weight: 700; }
+        h2 { font-size: 1.5rem; color: var(--primary-dark); margin-top: 40px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+        h3 { font-size: 1.2rem; margin-top: 30px; color: var(--text); }
+        h4 { font-size: 1.05rem; margin-top: 15px; color: var(--text-light); font-weight: 600; }
+
+        .meta {
+            color: var(--text-light);
+            font-size: 0.9rem;
+            margin-top: 10px;
+            display: flex;
+            gap: 20px;
+        }
+
+        p { margin-bottom: 1.5rem; }
+        
+        ul { margin-top: 0; padding-left: 20px; }
+        li { margin-bottom: 8px; }
+
+        .diagram-container {
+            background: #ffffff;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 30px 0;
+            text-align: center;
+            overflow-x: auto;
+            border: 1px solid var(--border);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.02);
+        }
+
+        .alert {
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 4px solid;
+            margin: 30px 0;
+            background: #f8fafc;
+            border-color: var(--text-light);
+        }
+
+        .trust-level {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-top: 10px;
+        }
+        
+        .trust-high { background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
+        .trust-untrusted { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
+
+        @media print {
+            body { background: white; padding: 0; }
+            .container { box-shadow: none; border: none; width: 100%; max-width: 100%; padding: 0; }
+            .diagram-container { page-break-inside: avoid; border: none; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>Threat Modeling DFD & System Scope</h1>
+        <div class="meta">
+            <span><strong>Project:</strong> Guardian's Embrace Volunteer Portal</span>
+            <span><strong>Objective:</strong> Architecture Threat Modeling (STRIDE / DFD alignment)</span>
+            <span><strong>Date:</strong> March 2026</span>
+        </div>
+    </header>
+
+    <section>
+        <h2>1. Introduction</h2>
+        <p>
+            This document defines the system boundaries, data flow paths, and the explicit scope and trust levels of each system component. It is designed to act as the foundation for threat modeling exercises, replacing abstract architectural views with a security-focused perspective centered on <strong>Authentication (AuthN)</strong>, <strong>Authorization (AuthZ)</strong>, and <strong>Transactions across Trust Boundaries</strong>.
+        </p>
+    </section>
+
+    <section>
+        <h2>2. Data Flow Diagram (DFD)</h2>
+        <p>
+            The following diagram is structured specifically for threat modeling analysis, explicitly separating external interactors (rectangles), data processes (circles), and data stores (cylinders). Ensure you map STRIDE threats across these distinct trust boundaries.
+        </p>
+        
+        <div class="diagram-container">
+            <div class="mermaid">
+                graph TD
+                classDef ext fill:#f8cecc,stroke:#b85450,stroke-width:2px;
+                classDef proc fill:#d5e8d4,stroke:#82b366,stroke-width:2px,shape:circle;
+                classDef store fill:#dae8fc,stroke:#6c8ebf,stroke-width:2px;
+                classDef filestore fill:#fff2cc,stroke:#d6b656,stroke-width:2px;
+
+                %% External Interactors
+                Vol[Volunteer / Admin Browser]:::ext
+                GoogleIDP[Google Auth IDP]:::ext
+                GDrive[Google Shared Drive API]:::ext
+
+                %% Data Stores (within Data Boundary)
+                subgraph "Data Trust Boundary (MongoDB)"
+                    DB_Users[(User Profiles & Roles)]:::store
+                    DB_Subs[(Submissions)]:::store
+                end
+
+                %% Application Processes (within Server Boundary)    
+                subgraph "API Trust Boundary (FastAPI Server)"
+                    AuthN((1. Authenticate <br/> User Identity)):::proc
+                    AuthZ((2. Authorize <br/> Request)):::proc
+                    Perform((3. Process <br/> Submissions/Files)):::proc
+                    AppLog[/Server Logs<br/>app.log/]:::filestore
+                end
+
+                %% Data Flows: Authentication
+                Vol -- "A1. OAuth Access Token" --> AuthN
+                AuthN -- "A2. Verify Token Signature" --> GoogleIDP
+                GoogleIDP -- "A3. Identity Claims (Email/ID)" --> AuthN
+                AuthN -- "A4. Identify / Fetch Profile" --> DB_Users
+                DB_Users -- "A5. Profile Status" --> AuthN
+                AuthN -- "A6. Issue Session JWT" --> Vol
+                
+                %% Data Flows: Authorization
+                Vol -- "B1. API Req (JWT + Payload)" --> AuthZ
+                AuthZ -- "B2. Check User Role / Valid Window" --> DB_Users
+                DB_Users -- "B3. Allowed / Denied Status" --> AuthZ
+                AuthZ -- "B4. Denied Request (HTTP 401/403)" --> Vol
+                
+                %% Data Flows: Execution
+                AuthZ -- "B5. Authorized Payload Context" --> Perform
+                Perform -- "C1. Store Transaction Metadata" --> DB_Subs
+                Perform -- "C2. Stream File Bytes (No Local Disk)" --> GDrive
+                GDrive -- "C3. Returned File ID / URL" --> Perform
+                Perform -- "C4. Confirmation Response" --> Vol
+
+                %% Automated Audit Trails
+                AuthN -. "AuthN Context" .-> AppLog
+                AuthZ -. "AuthZ Results (Denials/Grants)" .-> AppLog
+                Perform -. "Transaction Manifests" .-> AppLog
+            </div>
+        </div>
+    </section>
+
+    <section>
+        <h2>3. System Scope & Trust Boundaries</h2>
+        <p>To help the team spot potential risks (like Spoofing, Tampering, Repudiation, Information Disclosure, Denial of Service, or Elevation of Privilege), we've mapped out exactly what each part of our system does and how much we actually trust it.</p>
+
+        <h3>3.1 The Client Browser (React SPA)</h3>
+        <ul>
+            <li><strong>What it does:</strong> It runs our React web app, handles the user interface, puts together API requests, and kicks off the initial Google Sign-In redirect.</li>
+            <li><strong>Data it holds:</strong> Temporary session tokens (JWTs) and whatever the user types into forms before they hit "submit."</li>
+        </ul>
+        <div class="trust-level trust-untrusted">Trust Level: Untrusted</div>
+        <ul>
+            <li><em>Security Mindset:</em> We assume the browser is basically running in hostile territory. An attacker could fully manipulate or fake it.</li>
+            <li><em>What this means for our code:</em> We don't trust the frontend to enforce business logic, clean data, or check roles. The backend re-verifies absolutely everything.</li>
+        </ul>
+
+        <h3>3.2 Authentication & Authorization (FastAPI Middlewares)</h3>
+        <ul>
+            <li><strong>What it does:</strong> This is our digital bouncer. It grabs incoming requests, double-checks Google ID tokens, issues our internal session tokens, and makes sure standard volunteers aren't trying to sneak into Admin-only areas.</li>
+            <li><strong>Data it holds:</strong> It temporarily handles identity claims in memory and holds the secret signing key in its environment variables.</li>
+        </ul>
+        <div class="trust-level trust-high">Trust Level: High</div>
+        <ul>
+            <li><em>Security Mindset:</em> This is our frontline defense. If this gets bypassed, we're in big trouble.</li>
+            <li><em>What this means for our code:</em> This layer is critical. If our JWT secrets leak, attackers could elevate their privileges. We also have to watch out for denial-of-service (DoS) attacks if someone spams us with fake cryptographic requests.</li>
+        </ul>
+
+        <h3>3.3 Transaction Processing Engine (FastAPI Endpoints)</h3>
+        <ul>
+            <li><strong>What it does:</strong> It runs our core business logic. It checks uploaded data strictly against Pydantic schemas (to stop injection attacks) and streams user file uploads straight to Google Drive so they never touch our local hard drive.</li>
+            <li><strong>Data it holds:</strong> Active file streams and the details of volunteer submissions.</li>
+        </ul>
+        <div class="trust-level trust-high">Trust Level: High</div>
+        <ul>
+            <li><em>Security Mindset:</em> We entirely trust this engine, but only because it exclusively processes requests that have already been cleared by the Authorization layer above it.</li>
+        </ul>
+
+        <h3>3.4 Google OAuth 2.0 (Identity Provider)</h3>
+        <ul>
+            <li><strong>What it does:</strong> It handles all the messy password stuff, including Multi-Factor Authentication (MFA) and account recovery. It just hands over a verified "Yes, this is definitely them" token.</li>
+            <li><strong>Data it holds:</strong> User passwords, MFA backup codes, and recovery contact info.</li>
+        </ul>
+        <div class="trust-level trust-high">Trust Level: High (External)</div>
+        <ul>
+            <li><em>Security Mindset:</em> We are fully offloading password security to Google. Our biggest blind spot here is if a user’s Google account gets hacked—our system wouldn’t natively know the difference.</li>
+        </ul>
+
+        <h3>3.5 MongoDB Atlas (Database)</h3>
+        <ul>
+            <li><strong>What it does:</strong> This is our permanent record book. It stores user histories, system settings, and details about volunteer submissions.</li>
+            <li><strong>Data it holds:</strong> Personally Identifiable Information (PII) like names and emails, plus all our internal system IDs.</li>
+        </ul>
+        <div class="trust-level trust-high">Trust Level: High</div>
+        <ul>
+            <li><em>Security Mindset:</em> This database lives in a protected, isolated network space (VPC).</li>
+            <li><em>What this means for our code:</em> Since this holds sensitive data, it's a prime target for breaches or data tampering. We strictly limit access so only the API server can talk to it.</li>
+        </ul>
+
+        <h3>3.6 Google Shared Drive (External File Storage)</h3>
+        <ul>
+            <li><strong>What it does:</strong> It acts as the organization's long-term filing cabinet for anything volunteers upload.</li>
+            <li><strong>Data it holds:</strong> The actual raw files and documents.</li>
+        </ul>
+        <div class="trust-level trust-high">Trust Level: High (External)</div>
+        <ul>
+            <li><em>Security Mindset:</em> We use a dedicated, locked-down Service Account to handle uploads so unauthorized people on the internet can't snoop through our files.</li>
+            <li><em>What this means for our code:</em> While the files are safe from outsiders, if a volunteer accidentally uploads a virus, Google Drive will store it. We don't currently have active anti-virus scanning intercepting those uploads.</li>
+        </ul>
+    </section>
+
+    <div class="alert">
+        <strong>Strategic Note for Reviewers:</strong> Please map STRIDE threats against the labeled Data Flows (A1-A6, B1-B5, C1-C4) in the diagram above. Ensure that mitigations exist for data crossing the Trust Boundaries defined in the diagram.
+    </div>
+</div>
+
+<script>
+    mermaid.initialize({ 
+        startOnLoad: true, 
+        theme: 'base',
+        themeVariables: {
+            primaryColor: '#f1f5f9',
+            primaryTextColor: '#0f172a',
+            primaryBorderColor: '#cbd5e1',
+            lineColor: '#64748b',
+            secondaryColor: '#e2e8f0',
+            tertiaryColor: '#ffffff'
+        }
+    });
+</script>
+
+</body>
+</html>

@@ -1,14 +1,30 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
-import type { Project, User, ProjectCreate } from '../lib/api';
+import type { Project, ProjectUserSummary, User, ProjectCreate } from '../lib/api';
 import { Navbar, Footer } from '../components/Layout';
 import { Button, LoadingSpinner, EmptyState, Input, Textarea } from '../components/ui';
 import { Logo } from '../components/Logo';
-import { useAuth } from '../lib/AuthContext';
+import { useAuth } from '../lib/useAuth';
 import { Search, Mail, Plus, Users, X, Filter, Edit2, Trash2, Upload, Image as ImageIcon } from 'lucide-react';
+import {
+    type RoleTagValue,
+    formatTagLabel,
+    getNonRoleTags,
+    getRoleTags,
+    isRoleTag,
+    normalizeProjectTags,
+} from '../lib/projectAccess';
+
+const ROLE_TAG_OPTIONS: Array<{ value: RoleTagValue; label: string; description: string }> = [
+    { value: 'volunteer', label: 'Volunteer', description: 'Visible volunteer tag' },
+    { value: 'team_lead', label: 'Team Lead', description: 'Visible team-lead tag' },
+    { value: 'admin', label: 'Admin', description: 'Visible admin tag' },
+];
 
 export default function ProjectsPage() {
-    const { isAdmin } = useAuth();
+    const navigate = useNavigate();
+    const { canManageOperations } = useAuth();
     const [projects, setProjects] = useState<Project[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [filterStatus, setFilterStatus] = useState<string>('all');
@@ -22,18 +38,33 @@ export default function ProjectsPage() {
     const [isUploading, setIsUploading] = useState(false);
 
     const [users, setUsers] = useState<User[]>([]);
+    const assignableUsers = users.filter((user) => user.is_active);
 
     useEffect(() => {
+        const loadData = async () => {
+            setIsLoading(true);
+            try {
+                const projectsPromise = api.getProjects();
+                const usersPromise = canManageOperations ? api.getAllUsers({ is_active: true }) : Promise.resolve([]);
+                const [projectsData, usersData] = await Promise.all([projectsPromise, usersPromise]);
+                setProjects(projectsData);
+                setUsers(usersData);
+            } catch (error) {
+                console.error('Failed to load data', error);
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
         loadData();
-    }, []);
+    }, [canManageOperations]);
 
     const loadData = async () => {
         setIsLoading(true);
         try {
-            const [projectsData, usersData] = await Promise.all([
-                api.getProjects(),
-                api.getAllUsers()
-            ]);
+            const projectsPromise = api.getProjects();
+            const usersPromise = canManageOperations ? api.getAllUsers({ is_active: true }) : Promise.resolve([]);
+            const [projectsData, usersData] = await Promise.all([projectsPromise, usersPromise]);
             setProjects(projectsData);
             setUsers(usersData);
         } catch (error) {
@@ -65,6 +96,7 @@ export default function ProjectsPage() {
         try {
             const payload = {
                 ...projectForm,
+                tags: normalizeProjectTags(projectForm.tags),
                 // Ensure empty strings are undefined for optional fields
                 lead_id: projectForm.lead_id || undefined
             };
@@ -97,7 +129,7 @@ export default function ProjectsPage() {
 
     const openCreateModal = () => {
         setEditingProject(null);
-        setProjectForm({ name: '', description: '', status: 'planned', member_ids: [] });
+        setProjectForm({ name: '', description: '', status: 'planned', tags: [], member_ids: [] });
         setShowCreateModal(true);
     };
 
@@ -107,6 +139,7 @@ export default function ProjectsPage() {
             name: project.name,
             description: project.description,
             status: project.status,
+            tags: normalizeProjectTags(project.tags),
             banner_image: project.banner_image,
             lead_id: project.lead?.id,
             member_ids: project.members.map(m => m.id)
@@ -117,27 +150,43 @@ export default function ProjectsPage() {
     const closeModal = () => {
         setShowCreateModal(false);
         setEditingProject(null);
-        setProjectForm({ name: '', description: '', status: 'planned', member_ids: [] });
+        setProjectForm({ name: '', description: '', status: 'planned', tags: [], member_ids: [] });
+    };
+
+    const toggleRoleTag = (tag: RoleTagValue) => {
+        setProjectForm((prev) => {
+            const currentTags = normalizeProjectTags(prev.tags);
+            const nextTags = currentTags.includes(tag)
+                ? currentTags.filter((existingTag) => existingTag !== tag)
+                : [...currentTags, tag];
+
+            return { ...prev, tags: nextTags };
+        });
     };
 
     const filteredProjects = projects.filter(p => {
         const matchesStatus = filterStatus === 'all' || p.status === filterStatus;
-        const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            p.description.toLowerCase().includes(searchQuery.toLowerCase());
+        const normalizedSearch = searchQuery.toLowerCase();
+        const matchesSearch = p.name.toLowerCase().includes(normalizedSearch) ||
+            p.description.toLowerCase().includes(normalizedSearch) ||
+            normalizeProjectTags(p.tags).some((tag) => formatTagLabel(tag).toLowerCase().includes(normalizedSearch));
         return matchesStatus && matchesSearch;
     });
+
+    const selectedRoleTags = getRoleTags(projectForm.tags);
+    const existingNonRoleTags = getNonRoleTags(projectForm.tags);
 
     return (
         <div className="page-wrapper">
             <Navbar />
-            <main className="main-content">
+            <main id="main-content" className="main-content">
                 <div className="container">
                     <div className="flex-between" style={{ marginBottom: '2rem' }}>
                         <div>
                             <h1 style={{ fontSize: '2.5rem', fontWeight: 800, margin: '0 0 0.5rem 0', color: 'var(--color-text-primary)' }}>Our Projects</h1>
                             <p style={{ color: 'var(--color-text-muted)', margin: 0, fontSize: '1.1rem' }}>Explore the initiatives our team is working on to make a difference.</p>
                         </div>
-                        {isAdmin && (
+                        {canManageOperations && (
                             <Button onClick={openCreateModal}>
                                 <Plus size={18} style={{ marginRight: '0.5rem' }} />
                                 New Project
@@ -191,7 +240,8 @@ export default function ProjectsPage() {
                                 <ProjectCard
                                     key={project.id}
                                     project={project}
-                                    isAdmin={isAdmin}
+                                    isAdmin={canManageOperations}
+                                    onOpen={() => navigate(`/projects/${project.id}`)}
                                     onEdit={() => openEditModal(project)}
                                     onDelete={() => handleDeleteProject(project.id)}
                                 />
@@ -306,6 +356,49 @@ export default function ProjectsPage() {
                                     required
                                 />
 
+                                <div>
+                                    <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, color: '#374151', marginBottom: '0.25rem' }}>Role Tags</label>
+                                    <p style={{ fontSize: '0.75rem', color: '#6b7280', margin: '0 0 0.75rem 0' }}>
+                                        Choose which role labels should appear on the project. These tags are visible on the project card and board.
+                                    </p>
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+                                        {ROLE_TAG_OPTIONS.map((option) => {
+                                            const isSelected = selectedRoleTags.includes(option.value);
+
+                                            return (
+                                                <button
+                                                    key={option.value}
+                                                    type="button"
+                                                    onClick={() => toggleRoleTag(option.value)}
+                                                    style={{
+                                                        border: isSelected ? '1px solid #8b1538' : '1px solid #d1d5db',
+                                                        backgroundColor: isSelected ? '#fff1f2' : '#ffffff',
+                                                        color: isSelected ? '#8b1538' : '#374151',
+                                                        borderRadius: '999px',
+                                                        padding: '0.5rem 0.85rem',
+                                                        fontSize: '0.85rem',
+                                                        fontWeight: 600,
+                                                        cursor: 'pointer',
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        gap: '0.35rem'
+                                                    }}
+                                                    aria-pressed={isSelected}
+                                                    title={option.description}
+                                                >
+                                                    <span>{option.label}</span>
+                                                    {isSelected && <span>• selected</span>}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                    {existingNonRoleTags.length > 0 && (
+                                        <p style={{ fontSize: '0.75rem', color: '#6b7280', margin: '0.75rem 0 0 0' }}>
+                                            Keeping existing tags: {existingNonRoleTags.join(', ')}
+                                        </p>
+                                    )}
+                                </div>
+
                                 {editingProject && (
                                     <div>
                                         <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, color: '#374151', marginBottom: '0.25rem' }}>Status</label>
@@ -318,7 +411,7 @@ export default function ProjectsPage() {
                                                 outline: 'none'
                                             }}
                                             value={projectForm.status}
-                                            onChange={(e) => setProjectForm({ ...projectForm, status: e.target.value as any })}
+                                            onChange={(e) => setProjectForm({ ...projectForm, status: e.target.value as ProjectCreate['status'] })}
                                         >
                                             <option value="planned">Planned</option>
                                             <option value="active">Active</option>
@@ -343,10 +436,15 @@ export default function ProjectsPage() {
                                         onChange={(e) => setProjectForm({ ...projectForm, lead_id: e.target.value || undefined })}
                                     >
                                         <option value="">Select a lead...</option>
-                                        {users.map(user => (
-                                            <option key={user.id} value={user.id}>{user.name}</option>
+                                        {assignableUsers.map(user => (
+                                            <option key={user.id} value={user.id}>
+                                                {user.name} ({formatTagLabel(user.role || 'volunteer')}{user.invited_only ? ' - Pending login' : ''})
+                                            </option>
                                         ))}
                                     </select>
+                                    <p style={{ fontSize: '0.75rem', color: '#6b7280', margin: '0.35rem 0 0' }}>
+                                        Invited teammates appear here right away and are marked until they complete their first login.
+                                    </p>
                                 </div>
 
                                 {/* Team Members */}
@@ -360,7 +458,7 @@ export default function ProjectsPage() {
                                         padding: '0.5rem',
                                         backgroundColor: '#f9fafb'
                                     }}>
-                                        {users.length > 0 ? users.map(user => (
+                                        {assignableUsers.length > 0 ? assignableUsers.map(user => (
                                             <div key={user.id} style={{ display: 'flex', alignItems: 'center', marginBottom: '0.5rem' }}>
                                                 <input
                                                     type="checkbox"
@@ -376,7 +474,16 @@ export default function ProjectsPage() {
                                                     style={{ marginRight: '0.5rem', width: '16px', height: '16px' }}
                                                 />
                                                 <label htmlFor={`member-${user.id}`} style={{ fontSize: '0.875rem', cursor: 'pointer' }}>
-                                                    {user.name} <span style={{ color: '#6b7280', fontSize: '0.75rem' }}>({user.email})</span>
+                                                    {user.name}{' '}
+                                                    <span style={{ color: '#8b1538', fontSize: '0.75rem', fontWeight: 600 }}>
+                                                        {formatTagLabel(user.role || 'volunteer')}
+                                                    </span>{' '}
+                                                    {user.invited_only && (
+                                                        <span style={{ color: '#b45309', fontSize: '0.75rem', fontWeight: 600 }}>
+                                                            Pending login
+                                                        </span>
+                                                    )}{' '}
+                                                    <span style={{ color: '#6b7280', fontSize: '0.75rem' }}>({user.email})</span>
                                                 </label>
                                             </div>
                                         )) : (
@@ -411,13 +518,28 @@ export default function ProjectsPage() {
 interface ProjectCardProps {
     project: Project;
     isAdmin: boolean;
+    onOpen: () => void;
     onEdit: () => void;
     onDelete: () => void;
 }
 
-function ProjectCard({ project, isAdmin, onEdit, onDelete }: ProjectCardProps) {
+function ProjectCard({ project, isAdmin, onOpen, onEdit, onDelete }: ProjectCardProps) {
+    const projectTags = normalizeProjectTags(project.tags);
+
     return (
-        <div className="project-card">
+        <div
+            className="project-card"
+            role="button"
+            tabIndex={0}
+            onClick={onOpen}
+            onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    onOpen();
+                }
+            }}
+            style={{ cursor: 'pointer' }}
+        >
             <div className="project-header">
                 {project.banner_image ? (
                     <img src={project.banner_image} alt={project.name} className="project-image" />
@@ -455,14 +577,20 @@ function ProjectCard({ project, isAdmin, onEdit, onDelete }: ProjectCardProps) {
                 <h3 className="project-title">{project.name}</h3>
                 <p className="project-description">{project.description}</p>
 
-                <div className="project-footer">
-                    <div className="team-header">
-                        <span className="team-label">Team</span>
-                        {project.lead && (
-                            <span className="team-lead">Lead: {project.lead.name}</span>
-                        )}
+                {projectTags.length > 0 && (
+                    <div style={{ marginBottom: '1rem' }}>
+                        <div style={{ fontSize: '0.72rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#64748b', marginBottom: '0.45rem' }}>
+                            Tags
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                            {projectTags.map((tag) => (
+                                <ProjectTagChip key={tag} tag={tag} />
+                            ))}
+                        </div>
                     </div>
+                )}
 
+                <div className="project-footer" style={{ marginTop: 'auto', paddingTop: '1rem', borderTop: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <div className="avatar-stack">
                         {project.members.length > 0 ? (
                             project.members.slice(0, 5).map((member) => (
@@ -471,7 +599,7 @@ function ProjectCard({ project, isAdmin, onEdit, onDelete }: ProjectCardProps) {
                                 </div>
                             ))
                         ) : (
-                            <span className="text-sm text-gray-400 italic">No members yet</span>
+                            <span style={{ fontSize: '0.8rem', color: '#94a3b8', fontStyle: 'italic' }}>No members</span>
                         )}
                         {project.members.length > 5 && (
                             <div className="avatar-more">
@@ -479,9 +607,53 @@ function ProjectCard({ project, isAdmin, onEdit, onDelete }: ProjectCardProps) {
                             </div>
                         )}
                     </div>
+
+                    <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            onOpen();
+                        }}
+                    >
+                        Open Board
+                    </Button>
                 </div>
             </div>
         </div>
+    );
+}
+
+function ProjectTagChip({ tag }: { tag: string }) {
+    const normalizedTag = tag.toLowerCase();
+    const isRoleBasedTag = isRoleTag(normalizedTag);
+
+    const style = isRoleBasedTag
+        ? {
+            backgroundColor: '#fff1f2',
+            color: '#8b1538',
+            border: '1px solid #fecdd3',
+        }
+        : {
+            backgroundColor: '#f8fafc',
+            color: '#334155',
+            border: '1px solid #cbd5e1',
+        };
+
+    return (
+        <span
+            className="badge"
+            style={{
+                ...style,
+                borderRadius: '999px',
+                fontWeight: 600,
+                fontSize: '0.78rem',
+                padding: '0.3rem 0.65rem'
+            }}
+        >
+            {formatTagLabel(tag)}
+        </span>
     );
 }
 
@@ -516,25 +688,36 @@ function StatusBadge({ status }: { status: string }) {
     );
 }
 
-function UserAvatar({ user }: { user: User }) {
+function UserAvatar({ user }: { user: ProjectUserSummary }) {
     const [showTooltip, setShowTooltip] = useState(false);
+    const [imageFailed, setImageFailed] = useState(false);
+    const initials = user.name
+        .split(' ')
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((part) => part.charAt(0).toUpperCase())
+        .join('') || 'U';
+    const shouldShowImage = Boolean(user.picture) && !imageFailed;
 
     return (
         <div
-            style={{ position: 'relative' }}
+            style={{ position: 'relative', width: '2rem', height: '2rem' }}
             onMouseEnter={() => setShowTooltip(true)}
             onMouseLeave={() => setShowTooltip(false)}
         >
-            {user.picture ? (
+            {shouldShowImage ? (
                 <img
                     src={user.picture}
-                    alt={user.name}
+                    alt=""
+                    onError={() => setImageFailed(true)}
                     style={{
+                        display: 'block',
                         width: '2rem',
                         height: '2rem',
                         borderRadius: '50%',
                         objectFit: 'cover',
-                        cursor: 'pointer'
+                        cursor: 'pointer',
+                        backgroundColor: '#f3f4f6'
                     }}
                 />
             ) : (
@@ -546,12 +729,13 @@ function UserAvatar({ user }: { user: User }) {
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    fontSize: '0.75rem',
-                    fontWeight: 'bold',
+                    fontSize: '0.72rem',
+                    fontWeight: 700,
                     color: '#4b5563',
-                    cursor: 'pointer'
+                    cursor: 'pointer',
+                    border: '1px solid #d1d5db'
                 }}>
-                    {user.name.charAt(0)}
+                    {initials}
                 </div>
             )}
 
@@ -573,11 +757,16 @@ function UserAvatar({ user }: { user: User }) {
                 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
                         <div style={{ width: '3rem', height: '3rem', borderRadius: '50%', overflow: 'hidden', backgroundColor: '#f3f4f6' }}>
-                            {user.picture ? (
-                                <img src={user.picture} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            {shouldShowImage ? (
+                                <img
+                                    src={user.picture}
+                                    alt=""
+                                    onError={() => setImageFailed(true)}
+                                    style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                                />
                             ) : (
-                                <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.25rem', fontWeight: 'bold', color: '#9ca3af' }}>
-                                    {user.name.charAt(0)}
+                                <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem', fontWeight: 700, color: '#6b7280' }}>
+                                    {initials}
                                 </div>
                             )}
                         </div>

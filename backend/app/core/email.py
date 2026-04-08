@@ -5,6 +5,7 @@ Uses SMTP (compatible with Gmail / Google Workspace).
 
 import logging
 import smtplib
+import ssl
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import List, Optional
@@ -25,6 +26,9 @@ def _get_smtp_config() -> dict:
         "from_email": getattr(settings, "smtp_from_email", "")
             or getattr(settings, "smtp_username", ""),
         "from_name": getattr(settings, "smtp_from_name", "Guardian's Embrace"),
+        "use_starttls": bool(getattr(settings, "smtp_use_starttls", True)),
+        "use_ssl": bool(getattr(settings, "smtp_use_ssl", False)),
+        "validate_certs": bool(getattr(settings, "smtp_validate_certs", True)),
     }
 
 
@@ -54,10 +58,21 @@ def send_email(
     errors = []
 
     try:
-        with smtplib.SMTP(cfg["host"], cfg["port"]) as server:
+        tls_context = ssl.create_default_context()
+        if not cfg["validate_certs"]:
+            tls_context.check_hostname = False
+            tls_context.verify_mode = ssl.CERT_NONE
+
+        if cfg["use_ssl"]:
+            server_context = smtplib.SMTP_SSL(cfg["host"], cfg["port"], context=tls_context)
+        else:
+            server_context = smtplib.SMTP(cfg["host"], cfg["port"])
+
+        with server_context as server:
             server.ehlo()
-            server.starttls()
-            server.ehlo()
+            if cfg["use_starttls"] and not cfg["use_ssl"]:
+                server.starttls(context=tls_context)
+                server.ehlo()
             server.login(cfg["username"], cfg["password"])
 
             for to_email in to_emails:

@@ -7,7 +7,9 @@ from datetime import datetime
 from typing import Optional, List
 
 from beanie import Document, Indexed
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.core.time import utc_now
 
 
 class Comment(Document):
@@ -36,8 +38,8 @@ class Comment(Document):
     is_deleted: bool = False
     
     # Timestamps
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
     
     class Settings:
         name = "comments"
@@ -46,8 +48,8 @@ class Comment(Document):
             [("submission_id", 1), ("created_at", 1)],
         ]
     
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "submission_id": "507f1f77bcf86cd799439011",
                 "user_id": "507f1f77bcf86cd799439012",
@@ -58,7 +60,7 @@ class Comment(Document):
                 "parent_id": None
             }
         }
-
+    )
 
 class CommentCreate(BaseModel):
     """Schema for creating a comment."""
@@ -85,8 +87,7 @@ class CommentResponse(BaseModel):
     updated_at: datetime
     replies: List["CommentResponse"] = []
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # Update forward reference

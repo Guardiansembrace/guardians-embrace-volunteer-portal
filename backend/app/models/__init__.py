@@ -6,7 +6,8 @@ from app.models.user import (
     UserCreate, 
     UserUpdate, 
     UserAdminUpdate, 
-    UserResponse
+    UserResponse,
+    AdminAccessSummary,
 )
 from app.models.submission import (
     Submission,
@@ -24,6 +25,40 @@ from app.models.comment import (
     CommentUpdate,
     CommentResponse
 )
+from app.models.project import (
+    Project,
+    ProjectStatus,
+    ProjectCreate,
+    ProjectUpdate,
+    ProjectResponse,
+    ProjectUserSummary,
+)
+from app.models.project_work_item import (
+    ProjectWorkItem,
+    WorkItemStatus,
+    WorkItemPriority,
+    ProjectWorkItemCreate,
+    ProjectWorkItemUpdate,
+    ProjectWorkItemResponse,
+)
+from app.models.project_join_request import (
+    ProjectJoinRequest,
+    ProjectJoinRequestStatus,
+    ProjectJoinRequestCreate,
+    ProjectJoinRequestReview,
+    ProjectJoinRequestResponse,
+)
+from app.models.admin_access import (
+    AdminAccessGrant,
+    AdminAccessGrantCreate,
+    AdminAccessGrantResponse,
+    AdminAccessScope,
+)
+from app.models.audit_log import (
+    AuditLog,
+    AuditLogEventType,
+    AuditLogResponse,
+)
 
 __all__ = [
     # User
@@ -33,6 +68,7 @@ __all__ = [
     "UserUpdate",
     "UserAdminUpdate",
     "UserResponse",
+    "AdminAccessSummary",
     # Submission
     "Submission",
     "SubmissionStatus",
@@ -47,4 +83,33 @@ __all__ = [
     "CommentCreate",
     "CommentUpdate",
     "CommentResponse",
+    # Project
+    "Project",
+    "ProjectStatus",
+    "ProjectCreate",
+    "ProjectUpdate",
+    "ProjectResponse",
+    "ProjectUserSummary",
+    # Project work items
+    "ProjectWorkItem",
+    "WorkItemStatus",
+    "WorkItemPriority",
+    "ProjectWorkItemCreate",
+    "ProjectWorkItemUpdate",
+    "ProjectWorkItemResponse",
+    # Project join requests
+    "ProjectJoinRequest",
+    "ProjectJoinRequestStatus",
+    "ProjectJoinRequestCreate",
+    "ProjectJoinRequestReview",
+    "ProjectJoinRequestResponse",
+    # Admin access
+    "AdminAccessGrant",
+    "AdminAccessGrantCreate",
+    "AdminAccessGrantResponse",
+    "AdminAccessScope",
+    # Audit logs
+    "AuditLog",
+    "AuditLogEventType",
+    "AuditLogResponse",
 ]

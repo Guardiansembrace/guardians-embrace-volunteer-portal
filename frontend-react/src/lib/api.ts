@@ -13,13 +13,92 @@ export interface User {
     role: 'volunteer' | 'team_lead' | 'admin';
     team?: string;
     is_active: boolean;
+    invited_only?: boolean;
     total_hours: number;
     total_submissions: number;
     submission_streak: number;
     created_at: string;
-    last_login: string;
+    last_login: string | null;
     profile_complete: boolean;
     file_access_expires?: string;
+    admin_access: AdminAccessSummary;
+}
+
+export type AdminAccessScope =
+    | 'view_users'
+    | 'edit_users'
+    | 'manage_user_status'
+    | 'manage_user_roles'
+    | 'manage_users'
+    | 'review_submissions'
+    | 'send_reminders'
+    | 'manage_invites'
+    | 'manage_projects'
+    | 'manage_settings'
+    | 'view_audit_logs'
+    | 'view_admin_access'
+    | 'manage_admin_access';
+
+export interface AdminAccessSummary {
+    can_access_portal: boolean;
+    is_delegated: boolean;
+    scopes: AdminAccessScope[];
+    grant_id?: string;
+    granted_by_email?: string;
+    expires_at?: string;
+}
+
+export interface AdminAccessGrant {
+    id: string;
+    user_id: string;
+    user_email: string;
+    user_name: string;
+    granted_by_user_id: string;
+    granted_by_email: string;
+    granted_by_name: string;
+    scopes: AdminAccessScope[];
+    note?: string;
+    expires_at?: string;
+    is_active: boolean;
+    created_at: string;
+    updated_at: string;
+    revoked_at?: string;
+    revoked_by_user_id?: string;
+    revoked_by_email?: string;
+}
+
+export interface AdminAccessGrantCreate {
+    user_id: string;
+    scopes: AdminAccessScope[];
+    note?: string | null;
+    expires_at?: string | null;
+}
+
+export interface AuditLogEntry {
+    id: string;
+    event_type: 'request' | 'security' | 'admin_access';
+    actor_user_id?: string;
+    actor_email?: string;
+    actor_name?: string;
+    actor_role?: string;
+    is_admin: boolean;
+    is_delegated: boolean;
+    delegated_grant_id?: string;
+    delegated_by_user_id?: string;
+    delegated_by_email?: string;
+    action: string;
+    resource_type: string;
+    resource_id?: string;
+    summary: string;
+    method?: string;
+    path?: string;
+    status_code?: number;
+    success: boolean;
+    request_id?: string;
+    ip_address?: string;
+    user_agent?: string;
+    metadata: Record<string, unknown>;
+    created_at: string;
 }
 
 export interface WorkEntry {
@@ -85,8 +164,10 @@ export interface WeekInfo {
     week_id: string;
     week_start: string;
     week_end: string;
+    submission_window_start: string;
     submission_deadline: string;
     is_submission_window_open: boolean;
+    allow_late_submissions: boolean;
     has_submission: boolean;
     submission_status?: string;
     submission_id?: string;
@@ -136,6 +217,12 @@ export interface UploadedFile {
     storage_type?: string;
 }
 
+export interface PresignedUploadResponse extends UploadedFile {
+    upload_url: string;
+    method: string;
+    headers?: Record<string, string>;
+}
+
 export interface FileInfo {
     id: string;
     name: string;
@@ -153,7 +240,19 @@ export interface FormSection {
     type: string;
     showHours: boolean;
     required: boolean;
-    fields?: any[];
+    fields?: Array<Record<string, unknown>>;
+}
+
+export interface WeeklyUpdateSettings {
+    window_mode: 'always_open' | 'scheduled';
+    submissions_open_day: 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
+    submissions_open_hour: number;
+    submissions_open_minute: number;
+    deadline_day: 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
+    deadline_hour: number;
+    deadline_minute: number;
+    allow_late_submissions: boolean;
+    timezone: string;
 }
 
 export interface AdminSettings {
@@ -161,6 +260,52 @@ export interface AdminSettings {
     tags: string[];
     active_projects: string[];
     form_sections: FormSection[];
+    weekly_updates: WeeklyUpdateSettings;
+}
+
+const DEFAULT_WEEKLY_UPDATE_SETTINGS: WeeklyUpdateSettings = {
+    window_mode: 'always_open',
+    submissions_open_day: 'friday',
+    submissions_open_hour: 0,
+    submissions_open_minute: 0,
+    deadline_day: 'sunday',
+    deadline_hour: 23,
+    deadline_minute: 59,
+    allow_late_submissions: true,
+    timezone: 'America/New_York',
+};
+
+function normalizeWeekInfo(data: WeekInfo): WeekInfo {
+    return {
+        ...data,
+        submission_window_start: data.submission_window_start ?? data.week_start,
+        submission_deadline: data.submission_deadline ?? data.week_end,
+        is_submission_window_open: data.is_submission_window_open ?? true,
+        allow_late_submissions: data.allow_late_submissions ?? true,
+    };
+}
+
+function normalizeAdminSettings(data: AdminSettings): AdminSettings {
+    return {
+        ...data,
+        tags: data.tags ?? [],
+        active_projects: data.active_projects ?? [],
+        form_sections: data.form_sections ?? [],
+        weekly_updates: {
+            ...DEFAULT_WEEKLY_UPDATE_SETTINGS,
+            ...(data.weekly_updates ?? {}),
+        },
+    };
+}
+
+export interface ProjectUserSummary {
+    id: string;
+    email: string;
+    name: string;
+    picture?: string;
+    role: 'volunteer' | 'team_lead' | 'admin';
+    team?: string;
+    invited_only?: boolean;
 }
 
 export interface Project {
@@ -170,8 +315,8 @@ export interface Project {
     status: 'active' | 'completed' | 'on_hold' | 'planned';
     tags?: string[];
     banner_image?: string;
-    lead?: User;
-    members: User[];
+    lead?: ProjectUserSummary;
+    members: ProjectUserSummary[];
     created_at: string;
     updated_at: string;
 }
@@ -186,12 +331,66 @@ export interface ProjectCreate {
     member_ids?: string[];
 }
 
-export interface AllowedEmail {
+export interface ProjectWorkItem {
     id: string;
+    project_id: string;
+    title: string;
+    description?: string;
+    item_type: string;
+    status: 'pending' | 'active' | 'blocked' | 'finished';
+    priority: 'low' | 'medium' | 'high' | 'urgent';
+    assignee_id?: string;
+    assignee_name?: string;
+    assignee_ids?: string[];
+    assignee_names?: string[];
+    created_by_id: string;
+    created_by_name: string;
+    updated_by_id: string;
+    updated_by_name: string;
+    due_date?: string;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface ProjectWorkItemCreate {
+    title: string;
+    description?: string | null;
+    item_type: string;
+    status?: 'pending' | 'active' | 'blocked' | 'finished';
+    priority?: 'low' | 'medium' | 'high' | 'urgent';
+    assignee_id?: string | null;
+    assignee_ids?: string[] | null;
+    due_date?: string | null;
+}
+
+export interface ProjectJoinRequest {
+    id: string;
+    project_id: string;
+    user_id: string;
+    user_email: string;
+    user_name: string;
+    message?: string;
+    status: 'pending' | 'approved' | 'declined';
+    requested_at: string;
+    reviewed_at?: string;
+    reviewed_by_id?: string;
+    reviewed_by_name?: string;
+}
+
+export interface ProjectJoinRequestCreate {
+    message?: string | null;
+}
+
+export interface AllowedEmail {
+    id?: string;
     email: string;
     role: 'volunteer' | 'team_lead' | 'admin';
     invited_by?: string;
     created_at: string;
+    portal_status?: 'pending_login' | 'access_record';
+    has_logged_in?: boolean;
+    user_name?: string;
+    user_last_login?: string | null;
 }
 
 export interface InviteCreate {
@@ -200,8 +399,13 @@ export interface InviteCreate {
 }
 
 
-class ApiClient {
+export class ApiClient {
     private token: string | null = null;
+    private readonly onUnauthorized: (path: string) => void;
+
+    constructor(onUnauthorized: (path: string) => void = (path) => window.location.assign(path)) {
+        this.onUnauthorized = onUnauthorized;
+    }
 
     setToken(token: string) {
         this.token = token;
@@ -217,6 +421,10 @@ class ApiClient {
     clearToken() {
         this.token = null;
         localStorage.removeItem('auth_token');
+    }
+
+    private redirectToLogin() {
+        this.onUnauthorized('/login');
     }
 
     private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
@@ -239,7 +447,7 @@ class ApiClient {
         if (!response.ok) {
             if (response.status === 401) {
                 this.clearToken();
-                window.location.href = '/login';
+                this.redirectToLogin();
             }
             const error = await response.json().catch(() => ({ detail: 'Request failed' }));
             throw new Error(error.detail || 'Request failed');
@@ -294,6 +502,7 @@ class ApiClient {
             active_users: number;
             inactive_users: number;
             volunteers: number;
+            team_leads: number;
             admins: number;
         }>('/users/stats/overview');
     }
@@ -336,7 +545,8 @@ class ApiClient {
 
     // Submissions
     async getCurrentWeekInfo(): Promise<WeekInfo> {
-        return this.request<WeekInfo>('/submissions/current-week');
+        const data = await this.request<WeekInfo>('/submissions/current-week');
+        return normalizeWeekInfo(data);
     }
 
     async getWorkCategories(): Promise<string[]> {
@@ -429,12 +639,48 @@ class ApiClient {
     }
 
     // Files / Google Drive
-    async getDriveStatus(): Promise<{ configured: boolean; message: string; storage_type: 'drive_org' | 'drive_personal' | 'local'; folder_name?: string }> {
-        return this.request<{ configured: boolean; message: string; storage_type: 'drive_org' | 'drive_personal' | 'local'; folder_name?: string }>('/files/drive-status');
+    async getDriveStatus(): Promise<{ configured: boolean; message: string; storage_type: 'shared_drive' | 's3' | 'local'; folder_name?: string }> {
+        return this.request<{ configured: boolean; message: string; storage_type: 'shared_drive' | 's3' | 'local'; folder_name?: string }>('/files/drive-status');
     }
 
     async uploadFile(file: File, weekId?: string): Promise<UploadedFile> {
         const token = this.getToken();
+        const status = await this.getDriveStatus();
+
+        if (status.storage_type === 's3') {
+            const uploadPlanResponse = await fetch(`${API_URL}/files/upload-url`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    filename: file.name,
+                    content_type: file.type || 'application/octet-stream',
+                    size: file.size,
+                    week_id: weekId,
+                }),
+            });
+
+            if (!uploadPlanResponse.ok) {
+                const error = await uploadPlanResponse.json().catch(() => ({ detail: 'Upload failed' }));
+                throw new Error(error.detail || 'Upload failed');
+            }
+
+            const uploadPlan = await uploadPlanResponse.json() as PresignedUploadResponse;
+            const uploadResponse = await fetch(uploadPlan.upload_url, {
+                method: uploadPlan.method || 'PUT',
+                headers: uploadPlan.headers ?? { 'Content-Type': file.type || 'application/octet-stream' },
+                body: file,
+            });
+
+            if (!uploadResponse.ok) {
+                throw new Error('Direct upload to S3 failed');
+            }
+
+            return uploadPlan;
+        }
+
         const formData = new FormData();
         formData.append('file', file);
         if (weekId) {
@@ -458,27 +704,11 @@ class ApiClient {
     }
 
     async uploadMultipleFiles(files: File[], weekId?: string): Promise<UploadedFile[]> {
-        const token = this.getToken();
-        const formData = new FormData();
-        files.forEach(file => formData.append('files', file));
-        if (weekId) {
-            formData.append('week_id', weekId);
+        const uploads: UploadedFile[] = [];
+        for (const file of files) {
+            uploads.push(await this.uploadFile(file, weekId));
         }
-
-        const response = await fetch(`${API_URL}/files/upload-multiple`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-            },
-            body: formData,
-        });
-
-        if (!response.ok) {
-            const error = await response.json().catch(() => ({ detail: 'Upload failed' }));
-            throw new Error(error.detail || 'Upload failed');
-        }
-
-        return response.json();
+        return uploads;
     }
 
     async getFolderLink(weekId?: string): Promise<{ folder_link: string | null; week_id?: string }> {
@@ -505,6 +735,10 @@ class ApiClient {
         }
 
         return response.json();
+    }
+
+    async getFileDownloadLink(fileId: string): Promise<{ url: string }> {
+        return this.request<{ url: string }>(`/files/download-link/${encodeURIComponent(fileId)}`);
     }
 
     // File listing
@@ -594,16 +828,106 @@ class ApiClient {
         });
     }
 
+    async getProjectWorkItems(projectId: string): Promise<ProjectWorkItem[]> {
+        return this.request<ProjectWorkItem[]>(`/projects/${projectId}/work-items`);
+    }
+
+    async createProjectWorkItem(projectId: string, data: ProjectWorkItemCreate): Promise<ProjectWorkItem> {
+        return this.request<ProjectWorkItem>(`/projects/${projectId}/work-items`, {
+            method: 'POST',
+            body: JSON.stringify(data),
+        });
+    }
+
+    async updateProjectWorkItem(projectId: string, workItemId: string, data: Partial<ProjectWorkItemCreate>): Promise<ProjectWorkItem> {
+        return this.request<ProjectWorkItem>(`/projects/${projectId}/work-items/${workItemId}`, {
+            method: 'PATCH',
+            body: JSON.stringify(data),
+        });
+    }
+
+    async deleteProjectWorkItem(projectId: string, workItemId: string): Promise<void> {
+        return this.request<void>(`/projects/${projectId}/work-items/${workItemId}`, {
+            method: 'DELETE',
+        });
+    }
+
+    async getProjectJoinRequests(projectId: string): Promise<ProjectJoinRequest[]> {
+        return this.request<ProjectJoinRequest[]>(`/projects/${projectId}/join-requests`);
+    }
+
+    async requestProjectAccess(projectId: string, data: ProjectJoinRequestCreate): Promise<ProjectJoinRequest> {
+        return this.request<ProjectJoinRequest>(`/projects/${projectId}/join-requests`, {
+            method: 'POST',
+            body: JSON.stringify(data),
+        });
+    }
+
+    async reviewProjectJoinRequest(
+        projectId: string,
+        joinRequestId: string,
+        status: 'approved' | 'declined'
+    ): Promise<ProjectJoinRequest> {
+        return this.request<ProjectJoinRequest>(`/projects/${projectId}/join-requests/${joinRequestId}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ status }),
+        });
+    }
+
     // Settings
     async getSettings(): Promise<AdminSettings> {
-        return this.request<AdminSettings>('/settings');
+        const data = await this.request<AdminSettings>('/settings');
+        return normalizeAdminSettings(data);
     }
 
     async updateSettings(data: AdminSettings): Promise<{ success: boolean; settings: AdminSettings }> {
-        return this.request<{ success: boolean; settings: AdminSettings }>('/settings', {
+        const response = await this.request<{ success: boolean; settings: AdminSettings }>('/settings', {
             method: 'PUT',
             body: JSON.stringify(data),
         });
+        return {
+            ...response,
+            settings: normalizeAdminSettings(response.settings),
+        };
+    }
+
+    // Delegated admin access
+    async getAdminAccessGrants(): Promise<AdminAccessGrant[]> {
+        return this.request<AdminAccessGrant[]>('/admin-access/grants');
+    }
+
+    async createAdminAccessGrant(data: AdminAccessGrantCreate): Promise<AdminAccessGrant> {
+        return this.request<AdminAccessGrant>('/admin-access/grants', {
+            method: 'POST',
+            body: JSON.stringify(data),
+        });
+    }
+
+    async revokeAdminAccessGrant(grantId: string): Promise<void> {
+        return this.request<void>(`/admin-access/grants/${grantId}`, {
+            method: 'DELETE',
+        });
+    }
+
+    async getAuditLogs(params?: {
+        limit?: number;
+        actor_user_id?: string;
+        resource_type?: string;
+        event_type?: AuditLogEntry['event_type'];
+        success?: boolean;
+        action?: string;
+        is_delegated?: boolean;
+    }): Promise<AuditLogEntry[]> {
+        const queryParams = new URLSearchParams();
+        if (params?.limit !== undefined) queryParams.append('limit', String(params.limit));
+        if (params?.actor_user_id) queryParams.append('actor_user_id', params.actor_user_id);
+        if (params?.resource_type) queryParams.append('resource_type', params.resource_type);
+        if (params?.event_type) queryParams.append('event_type', params.event_type);
+        if (params?.success !== undefined) queryParams.append('success', String(params.success));
+        if (params?.action) queryParams.append('action', params.action);
+        if (params?.is_delegated !== undefined) queryParams.append('is_delegated', String(params.is_delegated));
+        const qs = queryParams.toString();
+        return this.request<AuditLogEntry[]>(`/admin-access/audit-logs${qs ? `?${qs}` : ''}`);
     }
 
 }

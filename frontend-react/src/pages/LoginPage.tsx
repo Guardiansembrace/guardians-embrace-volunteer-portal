@@ -1,10 +1,26 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useGoogleLogin } from '@react-oauth/google';
-import { useAuth } from '../lib/AuthContext';
+import { useAuth } from '../lib/useAuth';
 import { Button, LoadingSpinner } from '../components/ui';
 import { Logo } from '../components/Logo';
 import { Shield, Users, Clock, FileText } from 'lucide-react';
+
+function formatGoogleLoginError(error?: string, description?: string) {
+    if (error === 'redirect_uri_mismatch') {
+        return 'Google OAuth is not configured for this site URL yet. Add this frontend URL in Google Cloud Console and try again.';
+    }
+
+    if (description) {
+        return `Google login failed: ${description}`;
+    }
+
+    if (error) {
+        return `Google login failed: ${error}`;
+    }
+
+    return 'Google login failed. Please try again.';
+}
 
 export default function LoginPage() {
     const navigate = useNavigate();
@@ -19,6 +35,7 @@ export default function LoginPage() {
     }, [isAuthenticated, isLoading, needsName, navigate]);
 
     const googleLogin = useGoogleLogin({
+        flow: 'implicit',
         onSuccess: async (tokenResponse) => {
             setIsLoggingIn(true);
             setLoginError(null);
@@ -31,8 +48,19 @@ export default function LoginPage() {
                 setIsLoggingIn(false);
             }
         },
-        onError: () => {
-            setLoginError('Google login failed. Please try again.');
+        onError: (errorResponse) => {
+            setLoginError(formatGoogleLoginError(errorResponse.error, errorResponse.error_description));
+        },
+        onNonOAuthError: (errorResponse) => {
+            if (errorResponse.type === 'popup_closed') {
+                setLoginError('Google login was canceled before it completed.');
+                return;
+            }
+            if (errorResponse.type === 'popup_failed_to_open') {
+                setLoginError('Google login popup could not open. Check popup blocking and try again.');
+                return;
+            }
+            setLoginError('Google login failed before authorization completed. Please try again.');
         },
         // Request Drive scope for file uploads to user's personal Drive
         scope: 'https://www.googleapis.com/auth/drive.file',

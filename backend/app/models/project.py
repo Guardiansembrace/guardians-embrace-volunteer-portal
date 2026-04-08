@@ -2,10 +2,11 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Optional
 
-from beanie import Document, Link, PydanticObjectId
-from pydantic import BaseModel, Field
+from beanie import Document, Link
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
-from app.models.user import User
+from app.core.time import utc_now
+from app.models.user import User, UserRole
 
 
 class ProjectStatus(str, Enum):
@@ -24,6 +25,29 @@ class ProjectBase(BaseModel):
     tags: List[str] = []
     banner_image: Optional[str] = None  # URL for project banner
 
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalize_tags(cls, value: Optional[List[str]]) -> List[str]:
+        seen: set[str] = set()
+        normalized: List[str] = []
+
+        for raw_tag in value or []:
+            tag = str(raw_tag).strip()
+            if not tag:
+                continue
+
+            lower_tag = tag.lower()
+            normalized_tag = lower_tag if lower_tag in {"volunteer", "team_lead", "admin"} else tag
+            dedupe_key = normalized_tag.lower()
+
+            if dedupe_key in seen:
+                continue
+
+            seen.add(dedupe_key)
+            normalized.append(normalized_tag)
+
+        return normalized
+
 
 class Project(Document, ProjectBase):
     """
@@ -35,15 +59,15 @@ class Project(Document, ProjectBase):
     members: List[Link[User]] = []
     
     # Timestamps
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
     
     class Settings:
         name = "projects"
         use_state_management = True
     
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "name": "Food Drive 2026",
                 "description": "Annual community food collection event.",
@@ -51,7 +75,7 @@ class Project(Document, ProjectBase):
                 "tags": ["outreach", "events"],
             }
         }
-
+    )
 
 class ProjectCreate(ProjectBase):
     """Schema for creating a project."""
@@ -70,13 +94,25 @@ class ProjectUpdate(BaseModel):
     member_ids: Optional[List[str]] = None
 
 
+class ProjectUserSummary(BaseModel):
+    """Lightweight user info embedded in project responses."""
+    id: str
+    email: EmailStr
+    name: str
+    picture: Optional[str] = None
+    role: UserRole
+    team: Optional[str] = None
+    invited_only: bool = False
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ProjectResponse(ProjectBase):
     """Schema for project response."""
-    id: PydanticObjectId
-    lead: Optional[User] = None  # Minimal user info or full object? Beanie Link fetches full
-    members: List[User] = []
+    id: str
+    lead: Optional[ProjectUserSummary] = None
+    members: List[ProjectUserSummary] = []
     created_at: datetime
     updated_at: datetime
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

@@ -39,13 +39,28 @@ class Database:
         from app.models.submission import Submission
         from app.models.comment import Comment
         from app.models.project import Project
+        from app.models.project_work_item import ProjectWorkItem
+        from app.models.project_join_request import ProjectJoinRequest
+        from app.models.admin_access import AdminAccessGrant
+        from app.models.audit_log import AuditLog
         from app.models.allowed_email import AllowedEmail
         from app.models.settings import AdminSettings
         
         # Initialize Beanie with all document models
         await init_beanie(
             database=self.database,
-            document_models=[User, Submission, Comment, Project, AllowedEmail, AdminSettings]
+            document_models=[
+                User,
+                Submission,
+                Comment,
+                Project,
+                ProjectWorkItem,
+                ProjectJoinRequest,
+                AdminAccessGrant,
+                AuditLog,
+                AllowedEmail,
+                AdminSettings,
+            ]
         )
     
     async def disconnect(self):

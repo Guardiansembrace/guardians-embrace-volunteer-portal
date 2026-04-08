@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import { api } from '../lib/api';
 import type { Comment } from '../lib/api';
 import { Button } from './ui';
@@ -10,6 +10,8 @@ interface CommentSectionProps {
 }
 
 export default function CommentSection({ submissionId }: CommentSectionProps) {
+    const commentInputId = useId();
+    const replyInputId = useId();
     const [comments, setComments] = useState<Comment[]>([]);
     const [newComment, setNewComment] = useState('');
     const [replyTo, setReplyTo] = useState<string | null>(null);
@@ -17,11 +19,7 @@ export default function CommentSection({ submissionId }: CommentSectionProps) {
     const [isLoading, setIsLoading] = useState(true);
     const [isSending, setIsSending] = useState(false);
 
-    useEffect(() => {
-        loadComments();
-    }, [submissionId]);
-
-    const loadComments = async () => {
+    const loadComments = useCallback(async () => {
         try {
             const data = await api.getComments(submissionId);
             setComments(data);
@@ -30,7 +28,11 @@ export default function CommentSection({ submissionId }: CommentSectionProps) {
         } finally {
             setIsLoading(false);
         }
-    };
+    }, [submissionId]);
+
+    useEffect(() => {
+        void loadComments();
+    }, [loadComments]);
 
     const handlePost = async () => {
         if (!newComment.trim()) return;
@@ -74,9 +76,11 @@ export default function CommentSection({ submissionId }: CommentSectionProps) {
 
             {/* Comment Input */}
             <div style={{ marginBottom: '1.25rem' }}>
+                <label htmlFor={commentInputId} className="sr-only">Add a comment</label>
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
                     <div style={{ flex: 1 }}>
                         <textarea
+                            id={commentInputId}
                             placeholder="Add a comment..."
                             value={newComment}
                             onChange={(e) => setNewComment(e.target.value)}
@@ -96,6 +100,7 @@ export default function CommentSection({ submissionId }: CommentSectionProps) {
                         size="sm"
                         onClick={handlePost}
                         disabled={!newComment.trim() || isSending}
+                        aria-label="Post comment"
                         style={{ alignSelf: 'flex-end' }}
                     >
                         <Send size={14} />
@@ -136,7 +141,9 @@ export default function CommentSection({ submissionId }: CommentSectionProps) {
                             {/* Reply Input */}
                             {replyTo === comment.id && (
                                 <div style={{ marginLeft: '1.5rem', marginTop: '0.5rem', display: 'flex', gap: '0.5rem' }}>
+                                    <label htmlFor={`${replyInputId}-${comment.id}`} className="sr-only">Write a reply</label>
                                     <input
+                                        id={`${replyInputId}-${comment.id}`}
                                         type="text"
                                         placeholder="Write a reply..."
                                         value={replyText}
@@ -146,7 +153,13 @@ export default function CommentSection({ submissionId }: CommentSectionProps) {
                                         onKeyDown={(e) => e.key === 'Enter' && handleReply(comment.id)}
                                         autoFocus
                                     />
-                                    <Button variant="primary" size="sm" onClick={() => handleReply(comment.id)} disabled={!replyText.trim() || isSending}>
+                                    <Button
+                                        variant="primary"
+                                        size="sm"
+                                        onClick={() => handleReply(comment.id)}
+                                        disabled={!replyText.trim() || isSending}
+                                        aria-label="Send reply"
+                                    >
                                         <Send size={12} />
                                     </Button>
                                 </div>
@@ -203,7 +216,9 @@ function CommentBubble({
             <p style={{ margin: 0, fontSize: '0.85rem', lineHeight: 1.4 }}>{comment.content}</p>
             {onReply && !isReply && (
                 <button
+                    type="button"
                     onClick={onReply}
+                    aria-label={`Reply to ${comment.user_name}`}
                     style={{
                         marginTop: '0.35rem',
                         background: 'none',

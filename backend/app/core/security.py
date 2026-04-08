@@ -2,7 +2,7 @@
 Security utilities: JWT tokens and Google OAuth verification.
 """
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional
 
 import httpx
@@ -11,9 +11,11 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 
 from app.core.config import get_settings
+from app.core.time import utc_now
 
 # Bearer token security scheme
 security = HTTPBearer(auto_error=False)
+_FILE_DOWNLOAD_SCOPE = "file_download"
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
@@ -23,9 +25,9 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     to_encode = data.copy()
     
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = utc_now() + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=settings.jwt_expire_minutes)
+        expire = utc_now() + timedelta(minutes=settings.jwt_expire_minutes)
     
     to_encode.update({"exp": expire})
     
@@ -51,6 +53,27 @@ def decode_access_token(token: str) -> Optional[dict]:
         return payload
     except JWTError:
         return None
+
+
+def create_file_download_token(file_id: str, expires_minutes: int | None = None) -> str:
+    """Create a short-lived token that authorizes downloading a specific file."""
+    settings = get_settings()
+    ttl_minutes = expires_minutes or settings.file_download_token_expire_minutes
+    return create_access_token(
+        {"sub": file_id, "scope": _FILE_DOWNLOAD_SCOPE},
+        expires_delta=timedelta(minutes=ttl_minutes),
+    )
+
+
+def verify_file_download_token(token: str) -> Optional[str]:
+    """Return the authorized file ID when the token is valid."""
+    payload = decode_access_token(token)
+    if not payload:
+        return None
+    if payload.get("scope") != _FILE_DOWNLOAD_SCOPE:
+        return None
+    file_id = payload.get("sub")
+    return file_id if isinstance(file_id, str) and file_id else None
 
 
 async def verify_google_token(access_token: str) -> dict:
@@ -151,6 +174,43 @@ async def get_current_admin_user(user = Depends(get_current_user)):
     return user
 
 
+def has_operations_access(user) -> bool:
+    """
+    Return True when a user can handle operational management tasks.
+    Team leads can run the operations layer, but only admins keep full system control.
+    """
+    from app.models.user import UserRole
+
+    return user.role in (UserRole.ADMIN, UserRole.TEAM_LEAD)
+
+
+async def has_extended_operations_access(user) -> bool:
+    """
+    Return True when a user has operations access directly or through delegated scope.
+    """
+    if has_operations_access(user):
+        return True
+
+    from app.core.admin_access import get_admin_access_context
+    from app.models.admin_access import AdminAccessScope
+
+    access = await get_admin_access_context(user)
+    return access.has_any_scope(AdminAccessScope.MANAGE_PROJECTS)
+
+
+async def get_current_operations_user(user = Depends(get_current_user)):
+    """
+    Get the current user and ensure they can access operational management features.
+    """
+    if not await has_extended_operations_access(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Operations access required"
+        )
+
+    return user
+
+
 async def get_optional_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ):
@@ -168,3 +228,4 @@ async def get_optional_current_user(
 
 # Alias for consistency
 get_current_admin = get_current_admin_user
+get_current_operations = get_current_operations_user

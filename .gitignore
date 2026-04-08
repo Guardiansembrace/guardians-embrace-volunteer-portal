@@ -9,7 +9,9 @@
 .env.local
 .env*.local
 *.env
+*.env.aws
 !.env.example
+!.env.aws.example
 
 # -----------------------------------------------------------------------------
 # Credentials & Secrets (CRITICAL)
@@ -131,6 +133,7 @@ test_upload.py
 .vercel
 .netlify
 .serverless
+.deployment/
 
 # -----------------------------------------------------------------------------
 # Misc

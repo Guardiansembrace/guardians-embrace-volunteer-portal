@@ -4,15 +4,20 @@ Handles Google OAuth login and token management.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
+from app.core.admin_access import build_user_response
+from app.core.audit import write_audit_log
 from app.core.config import get_settings
-from app.core.security import create_access_token, verify_google_token
+from app.core.rate_limit import rate_limit_by_ip
+from app.core.security import create_access_token, verify_google_token, get_current_user
+from app.core.time import utc_now
+from app.models.audit_log import AuditLogEventType
 from app.models.user import User, UserRole, UserResponse
 from app.models.allowed_email import AllowedEmail
 
@@ -31,8 +36,12 @@ class AuthResponse(BaseModel):
     user: UserResponse
 
 
-@router.post("/google", response_model=AuthResponse)
-async def login_with_google(request: GoogleLoginRequest):
+@router.post(
+    "/google",
+    response_model=AuthResponse,
+    dependencies=[Depends(rate_limit_by_ip("auth_google"))],
+)
+async def login_with_google(request: GoogleLoginRequest, http_request: Request):
     """
     Authenticate a user with a Google OAuth2 access token.
     
@@ -57,16 +66,17 @@ async def login_with_google(request: GoogleLoginRequest):
                 detail="Could not retrieve user info from Google"
             )
         
+        settings = get_settings()
+        is_bootstrap_admin = settings.is_admin(email)
+        allowed_email_entry = await AllowedEmail.find_one(AllowedEmail.email == email)
+        
         # Check if user exists
         user = await User.find_one(User.email == email)
-        settings = get_settings()
+        was_invited_only = bool(user and user.invited_only)
         
         if user is None:
             # Check if this email is allowed (invited)
             # EXCEPTION: If is_admin(email) is true, allow it (bootstrap admin)
-            is_bootstrap_admin = settings.is_admin(email)
-            allowed_email_entry = await AllowedEmail.find_one(AllowedEmail.email == email)
-            
             if not is_bootstrap_admin and not allowed_email_entry:
                 logger.warning("Unauthorized login attempt: %s", email)
                 raise HTTPException(
@@ -83,8 +93,8 @@ async def login_with_google(request: GoogleLoginRequest):
             else:
                 role = UserRole.VOLUNTEER # Should not happen due to check above
             
-            # Admins have no file access expiry; volunteers get 7 days
-            file_access_expires = None if role == UserRole.ADMIN else (datetime.utcnow() + timedelta(days=7))
+            # Operations staff have no file access expiry; volunteers get 7 days
+            file_access_expires = None if role in (UserRole.ADMIN, UserRole.TEAM_LEAD) else (utc_now() + timedelta(days=7))
             
             user = User(
                 email=email,
@@ -94,20 +104,41 @@ async def login_with_google(request: GoogleLoginRequest):
                 role=role,
                 is_active=True,
                 profile_complete=False,  # Must set full name first
+                invited_only=False,
                 file_access_expires=file_access_expires,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow(),
-                last_login=datetime.utcnow(),
+                created_at=utc_now(),
+                updated_at=utc_now(),
+                last_login=utc_now(),
                 google_access_token=request.access_token,
             )
             await user.insert()
             logger.info("New user created: %s (role: %s)", email, role)
         else:
+            if user.invited_only and not is_bootstrap_admin and not allowed_email_entry:
+                logger.warning("Login blocked for revoked invite: %s", email)
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied. Your invitation is no longer active."
+                )
+
+            if not user.is_active and not user.invited_only:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Account is deactivated"
+                )
+
             # Update existing user
-            user.last_login = datetime.utcnow()
+            user.last_login = utc_now()
+            user.name = name
             user.picture = picture  # Update profile picture in case it changed
             user.google_id = google_id  # Ensure google_id is set
             user.google_access_token = request.access_token  # Refresh token for Drive
+
+            if user.invited_only:
+                user.role = UserRole.ADMIN if is_bootstrap_admin else allowed_email_entry.role
+                user.file_access_expires = None if user.role in (UserRole.ADMIN, UserRole.TEAM_LEAD) else (utc_now() + timedelta(days=7))
+                user.invited_only = False
+                user.is_active = True
             
             # Check if this user should be promoted to admin
             if settings.is_admin(email) and user.role != UserRole.ADMIN:
@@ -125,22 +156,18 @@ async def login_with_google(request: GoogleLoginRequest):
         }
         access_token = create_access_token(token_data)
         
-        # Build user response
-        user_response = UserResponse(
-            id=str(user.id),
-            email=user.email,
-            name=user.name,
-            picture=user.picture,
-            role=user.role,
-            team=user.team,
-            is_active=user.is_active,
-            total_hours=user.total_hours,
-            total_submissions=user.total_submissions,
-            submission_streak=user.submission_streak,
-            profile_complete=user.profile_complete,
-            file_access_expires=user.file_access_expires,
-            created_at=user.created_at,
-            last_login=user.last_login,
+        user_response = await build_user_response(user)
+
+        await write_audit_log(
+            request=http_request,
+            actor=user,
+            event_type=AuditLogEventType.SECURITY,
+            action="auth.google_login",
+            resource_type="user_session",
+            resource_id=str(user.id),
+            summary=f"{user.email} logged in with Google OAuth",
+            status_code=status.HTTP_200_OK,
+            metadata={"is_new_user": user.created_at == user.last_login or was_invited_only},
         )
         
         return AuthResponse(
@@ -152,18 +179,18 @@ async def login_with_google(request: GoogleLoginRequest):
         # Re-raise HTTP exceptions as-is
         raise
     except Exception as e:
-        # Log unexpected errors
+        # Log unexpected errors but do not expose internals to the client
         logger.error("Unexpected error during login: %s", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Authentication error: {str(e)}"
+            detail="Authentication failed. Please try again."
         )
 
 
 @router.get("/verify")
-async def verify_token():
+async def verify_token(current_user: User = Depends(get_current_user)):
     """
     Verify the current token is valid.
     Returns basic status - use /users/me for full user data.
     """
-    return {"valid": True}
+    return {"valid": True, "user_id": str(current_user.id)}
