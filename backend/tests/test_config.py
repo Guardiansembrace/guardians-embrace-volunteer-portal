@@ -2,6 +2,8 @@
 Tests for application settings parsing.
 """
 
+from pathlib import Path
+
 from app.core.config import Settings
 
 
@@ -29,3 +31,12 @@ class TestSettings:
             "second-admin@example.com",
             "shared-admin@example.com",
         ]
+
+    def test_settings_load_backend_env_even_when_cwd_is_repo_root(self, monkeypatch):
+        repo_root = Path(__file__).resolve().parents[2]
+        monkeypatch.chdir(repo_root)
+        monkeypatch.delenv("ALLOWED_ORIGINS", raising=False)
+
+        settings = Settings()
+
+        assert "http://localhost:5173" in settings.allowed_origins

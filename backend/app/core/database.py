@@ -39,6 +39,7 @@ class Database:
         from app.models.submission import Submission
         from app.models.comment import Comment
         from app.models.project import Project
+        from app.models.project_file import ProjectFile
         from app.models.project_work_item import ProjectWorkItem
         from app.models.project_join_request import ProjectJoinRequest
         from app.models.admin_access import AdminAccessGrant
@@ -54,6 +55,7 @@ class Database:
                 Submission,
                 Comment,
                 Project,
+                ProjectFile,
                 ProjectWorkItem,
                 ProjectJoinRequest,
                 AdminAccessGrant,

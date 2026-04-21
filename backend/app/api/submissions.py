@@ -4,6 +4,8 @@ Handles weekly volunteer submissions - create, update, submit, and review.
 """
 
 import logging
+from datetime import timedelta
+from math import isfinite
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
@@ -13,8 +15,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.core.admin_access import AdminAccessScope, get_admin_access_context, require_admin_scopes
 from app.core.config import load_shared_config
+from app.core.project_access import can_contribute_to_project, can_view_project_submission
 from app.core.rate_limit import rate_limit_by_user
-from app.core.security import get_current_user, has_operations_access
+from app.core.security import get_current_user
 from app.core.time import utc_now
 from app.core.utils import (
     can_submit_for_week,
@@ -27,7 +30,9 @@ from app.core.utils import (
     is_submission_window_open,
 )
 from app.core.weekly_updates import get_weekly_update_settings
-from app.models.user import User, UserRole
+from app.models.project import Project
+from app.models.project_work_item import ProjectWorkItem, WorkItemStatus
+from app.models.user import User
 from app.models.submission import (
     Submission,
     SubmissionCreate,
@@ -39,16 +44,258 @@ from app.models.submission import (
 )
 
 router = APIRouter(prefix="/submissions", tags=["Submissions"])
+project_router = APIRouter(prefix="/projects", tags=["Submissions"])
+
+MAX_WEEKLY_HOURS = 168.0
+MAX_SELECTABLE_SUBMISSION_WEEKS = 8
+
+
+def parse_submission_week_id(week_id: str | None) -> str:
+    """Normalize and validate an ISO week ID."""
+    candidate = (week_id or get_week_id()).strip()
+
+    try:
+        get_week_boundaries(candidate)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid week ID. Use ISO format like 2026-W14.",
+        ) from exc
+
+    return candidate
+
+
+def build_recent_week_ids(count: int, start_week_id: str | None = None) -> list[str]:
+    """Build a descending list of recent ISO week IDs."""
+    if count <= 0:
+        return []
+
+    week_ids: list[str] = []
+    current = start_week_id or get_week_id()
+    for _ in range(count):
+        week_ids.append(current)
+        current = get_previous_week_id(current)
+
+    return week_ids
+
+
+def is_future_week(target_week_id: str, current_week_id: str | None = None) -> bool:
+    """Return True when the target week is after the current schedule week."""
+    target_week_start, _ = get_week_boundaries(target_week_id)
+    current_week_start, _ = get_week_boundaries(current_week_id or get_week_id())
+    return target_week_start > current_week_start
+
+
+def is_week_inside_backfill_window(target_week_id: str, current_week_id: str | None = None) -> bool:
+    """Check whether a week is inside the allowed backfill window."""
+    current = current_week_id or get_week_id()
+    return target_week_id in build_recent_week_ids(MAX_SELECTABLE_SUBMISSION_WEEKS, current)
+
+
+async def get_submission_for_user_week_project(user_id: str, week_id: str, project_id: str) -> Submission | None:
+    """Fetch a submission by user, week, and project."""
+    return await Submission.find_one(
+        {
+            "user_id": user_id,
+            "week_id": week_id,
+            "project_id": project_id,
+        }
+    )
+
+
+async def _get_submission_project_or_403(project_id: str, current_user: User) -> Project:
+    """Load a project and ensure the current user can submit updates to it."""
+    try:
+        project = await Project.get(ObjectId(project_id), fetch_links=True)
+    except Exception:
+        project = None
+
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    if not can_contribute_to_project(project, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Project contribution access required",
+        )
+
+    return project
+
+
+async def _get_submission_project_for_view(project_id: str, current_user: User) -> Project:
+    """Load a project and ensure the current user can view project submissions."""
+    try:
+        project = await Project.get(ObjectId(project_id), fetch_links=True)
+    except Exception:
+        project = None
+
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    if not can_view_project_submission(project, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Project submission access required",
+        )
+
+    return project
+
+
+async def build_week_info(current_user: User, week_id: str, project_id: str | None = None) -> dict:
+    """Build week metadata for the requested submission week."""
+    week_start, week_end = get_week_boundaries(week_id)
+    window_start, submission_deadline = get_submission_window_bounds(week_id)
+    weekly_settings = get_weekly_update_settings()
+    if project_id:
+        await _get_submission_project_or_403(project_id, current_user)
+        submission = await get_submission_for_user_week_project(str(current_user.id), week_id, project_id)
+    else:
+        submission = await Submission.find_one({"user_id": str(current_user.id), "week_id": week_id})
+
+    return {
+        "week_id": week_id,
+        "week_start": week_start.isoformat(),
+        "week_end": week_end.isoformat(),
+        "submission_window_start": window_start.isoformat(),
+        "submission_deadline": submission_deadline.isoformat(),
+        "is_submission_window_open": is_submission_window_open(week_id),
+        "allow_late_submissions": weekly_settings.allow_late_submissions,
+        "has_submission": submission is not None,
+        "submission_status": submission.status.value if submission else None,
+        "submission_id": str(submission.id) if submission else None,
+    }
+
+
+async def refresh_user_submission_stats(current_user: User) -> None:
+    """Recalculate denormalized submission totals and streaks from persisted data."""
+    submitted_entries = await Submission.find(
+        Submission.user_id == str(current_user.id),
+        Submission.status != SubmissionStatus.DRAFT,
+    ).to_list()
+
+    current_user.total_submissions = len(submitted_entries)
+    current_user.total_hours = sum((entry.total_hours for entry in submitted_entries), 0.0)
+
+    if not submitted_entries:
+        current_user.submission_streak = 0
+        await current_user.save()
+        return
+
+    submitted_week_ids = {entry.week_id for entry in submitted_entries}
+    latest_week_id = max(
+        submitted_week_ids,
+        key=lambda candidate_week_id: get_week_boundaries(candidate_week_id)[0],
+    )
+
+    streak = 0
+    week_cursor = latest_week_id
+    while week_cursor in submitted_week_ids:
+        streak += 1
+        week_cursor = get_previous_week_id(week_cursor)
+
+    current_user.submission_streak = streak
+    await current_user.save()
+
+
+async def apply_work_item_status_updates(entries: list[WorkEntry], current_user: "User") -> None:
+    """For any work entry that carries a work_item_status_update, update the referenced work item.
+
+    Only updates items the user is actually assigned to, to prevent accidental cross-project changes.
+    Failures are logged but do not block the submission save.
+    """
+    seen: set[str] = set()
+    for entry in entries:
+        wid = entry.work_item_id
+        new_status_raw = entry.work_item_status_update
+        if not wid or not new_status_raw or wid in seen:
+            continue
+        seen.add(wid)
+        try:
+            new_status = WorkItemStatus(new_status_raw)
+        except ValueError:
+            logger.warning("Invalid work_item_status_update value %r – skipping", new_status_raw)
+            continue
+        try:
+            from beanie import PydanticObjectId
+            item = await ProjectWorkItem.get(PydanticObjectId(wid))
+        except Exception:
+            logger.warning("Work item %s not found – skipping status update", wid)
+            continue
+        if item is None:
+            continue
+        uid = str(current_user.id)
+        is_assigned = (
+            (item.assignee_id and str(item.assignee_id) == uid)
+            or any(str(aid) == uid for aid in (item.assignee_ids or []))
+        )
+        if not is_assigned:
+            logger.warning(
+                "User %s is not assigned to work item %s – skipping status update",
+                uid, wid,
+            )
+            continue
+        item.status = new_status
+        item.updated_by_id = current_user.id
+        item.updated_by_name = current_user.name
+        from app.core.time import utc_now as _utc_now
+        item.updated_at = _utc_now()
+        await item.save()
+        logger.info("Work item %s status → %s (via submission by %s)", wid, new_status, current_user.email)
 
 
 def calculate_total_hours(submission_data: SubmissionCreate) -> float:
     """Calculate total hours from all work entries."""
     total = 0.0
-    for entry in submission_data.past_work:
-        total += entry.hours
-    for entry in submission_data.present_work:
-        total += entry.hours
+    for section_name, entries in (
+        ("Past work", submission_data.past_work),
+        ("Present work", submission_data.present_work),
+    ):
+        for index, entry in enumerate(entries, start=1):
+            if not isfinite(entry.hours):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"{section_name} entry {index} hours must be a valid number.",
+                )
+            if entry.hours < 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"{section_name} entry {index} hours cannot be negative.",
+                )
+            if entry.hours > MAX_WEEKLY_HOURS:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"{section_name} entry {index} hours cannot exceed {MAX_WEEKLY_HOURS:.0f}.",
+                )
+            total += entry.hours
+
+    if total > MAX_WEEKLY_HOURS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Total weekly hours cannot exceed {MAX_WEEKLY_HOURS:.0f}.",
+        )
+
     return total
+
+
+def build_submission_create_payload(submission: Submission) -> SubmissionCreate:
+    """Rebuild a submission payload for validation and total recalculation."""
+    return SubmissionCreate(
+        project_id=getattr(submission, "project_id", "legacy-project"),
+        past_work=submission.past_work,
+        present_work=submission.present_work,
+        future_work=submission.future_work,
+        blockers=submission.blockers,
+        notes=submission.notes,
+        mood_rating=submission.mood_rating,
+        custom_responses=submission.custom_responses or {},
+    )
+
+
+def sync_submission_total_hours(submission: Submission) -> float:
+    """Validate stored hours and keep the persisted total in sync."""
+    total_hours = calculate_total_hours(build_submission_create_payload(submission))
+    submission.total_hours = total_hours
+    return total_hours
 
 
 def submission_to_response(s: Submission) -> SubmissionResponse:
@@ -58,6 +305,9 @@ def submission_to_response(s: Submission) -> SubmissionResponse:
         user_id=s.user_id,
         user_email=s.user_email,
         user_name=s.user_name,
+        project_id=getattr(s, "project_id", ""),
+        project_name=getattr(s, "project_name", None),
+        visibility=getattr(s, "visibility", "project_members"),
         week_id=s.week_id,
         week_start=s.week_start,
         week_end=s.week_end,
@@ -86,6 +336,8 @@ def submission_to_summary(s: Submission) -> SubmissionSummary:
         id=str(s.id),
         user_id=s.user_id,
         user_name=s.user_name,
+        project_id=getattr(s, "project_id", ""),
+        project_name=getattr(s, "project_name", None),
         week_id=s.week_id,
         total_hours=s.total_hours,
         status=s.status,
@@ -96,30 +348,84 @@ def submission_to_summary(s: Submission) -> SubmissionSummary:
 
 
 @router.get("/current-week")
-async def get_current_week_info(current_user: User = Depends(get_current_user)):
-    """Get information about the current week and user's submission status."""
-    week_id = get_week_id()
-    week_start, week_end = get_week_boundaries(week_id)
-    window_start, submission_deadline = get_submission_window_bounds(week_id)
-    weekly_settings = get_weekly_update_settings()
-    
-    # Check if user has a submission for this week
-    submission = await Submission.find_one(
-        Submission.user_id == str(current_user.id),
-        Submission.week_id == week_id
-    )
-    
+async def get_current_week_info(
+    week_id: Optional[str] = Query(None, description="Week ID to inspect (e.g. 2026-W14)"),
+    project_id: Optional[str] = Query(None, description="Project ID to scope the submission lookup."),
+    current_user: User = Depends(get_current_user),
+):
+    """Get information about a submission week and the user's status for that week."""
+    target_week_id = parse_submission_week_id(week_id)
+    return await build_week_info(current_user, target_week_id, project_id)
+
+
+@router.get("/selectable-weeks")
+async def get_selectable_submission_weeks(
+    include_week_id: Optional[str] = Query(
+        None,
+        description="Include an existing week even if it falls outside the normal backfill window.",
+    ),
+    project_id: Optional[str] = Query(None, description="Project ID to scope the submission lookup."),
+    current_user: User = Depends(get_current_user),
+):
+    """List weeks a volunteer can start or continue from the submission form."""
+    current_week_id = get_week_id()
+    candidate_week_ids = build_recent_week_ids(MAX_SELECTABLE_SUBMISSION_WEEKS, current_week_id)
+
+    if include_week_id:
+        included_week_id = parse_submission_week_id(include_week_id)
+        if not is_future_week(included_week_id, current_week_id) and included_week_id not in candidate_week_ids:
+            candidate_week_ids.append(included_week_id)
+
+    if project_id:
+        await _get_submission_project_or_403(project_id, current_user)
+        submissions = await Submission.find(
+            {
+                "user_id": str(current_user.id),
+                "project_id": project_id,
+                "week_id": {"$in": candidate_week_ids},
+            }
+        ).to_list()
+    else:
+        submissions = await Submission.find(
+            Submission.user_id == str(current_user.id),
+            {"week_id": {"$in": candidate_week_ids}},
+        ).to_list()
+    submission_by_week = {submission.week_id: submission for submission in submissions}
+
+    selectable_weeks: list[dict] = []
+    seen_week_ids: set[str] = set()
+    for candidate_week_id in candidate_week_ids:
+        if candidate_week_id in seen_week_ids:
+            continue
+        seen_week_ids.add(candidate_week_id)
+
+        submission = submission_by_week.get(candidate_week_id)
+        if (
+            candidate_week_id != current_week_id
+            and submission is None
+            and not can_submit_for_week(candidate_week_id)
+        ):
+            continue
+
+        week_start, week_end = get_week_boundaries(candidate_week_id)
+        selectable_weeks.append(
+            {
+                "week_id": candidate_week_id,
+                "week_start": week_start.isoformat(),
+                "week_end": week_end.isoformat(),
+                "is_current": candidate_week_id == current_week_id,
+                "has_submission": submission is not None,
+                "submission_id": str(submission.id) if submission else None,
+                "submission_status": submission.status.value if submission else None,
+            }
+        )
+
+    selectable_weeks.sort(key=lambda entry: entry["week_start"], reverse=True)
+
     return {
-        "week_id": week_id,
-        "week_start": week_start.isoformat(),
-        "week_end": week_end.isoformat(),
-        "submission_window_start": window_start.isoformat(),
-        "submission_deadline": submission_deadline.isoformat(),
-        "is_submission_window_open": is_submission_window_open(week_id),
-        "allow_late_submissions": weekly_settings.allow_late_submissions,
-        "has_submission": submission is not None,
-        "submission_status": submission.status.value if submission else None,
-        "submission_id": str(submission.id) if submission else None,
+        "current_week_id": current_week_id,
+        "max_backfill_weeks": MAX_SELECTABLE_SUBMISSION_WEEKS,
+        "weeks": selectable_weeks,
     }
 
 
@@ -136,16 +442,22 @@ async def get_work_categories():
 
 
 @router.get("/last-week-goals")
-async def get_last_week_goals(current_user: User = Depends(get_current_user)):
+async def get_last_week_goals(
+    week_id: Optional[str] = Query(None, description="Week ID to use as the submission target."),
+    project_id: Optional[str] = Query(None, description="Project ID to scope the carry-forward lookup."),
+    current_user: User = Depends(get_current_user),
+):
     """
     Get last week's future_work entries to carry forward as this week's past_work.
     Returns empty list if no submission existed last week.
     """
-    prev_week = get_previous_week_id()
-    prev_submission = await Submission.find_one(
-        Submission.user_id == str(current_user.id),
-        Submission.week_id == prev_week
-    )
+    target_week_id = parse_submission_week_id(week_id)
+    prev_week = get_previous_week_id(target_week_id)
+    if not project_id:
+        return {"goals": [], "from_week": prev_week}
+
+    await _get_submission_project_or_403(project_id, current_user)
+    prev_submission = await get_submission_for_user_week_project(str(current_user.id), prev_week, project_id)
     if not prev_submission or not prev_submission.future_work:
         return {"goals": [], "from_week": prev_week}
     return {
@@ -252,7 +564,7 @@ async def get_my_submissions(
     """Get all submissions for the current user."""
     submissions = await Submission.find(
         Submission.user_id == str(current_user.id)
-    ).sort(-Submission.created_at).skip(skip).limit(limit).to_list()
+    ).sort(-Submission.week_start).skip(skip).limit(limit).to_list()
     
     return [submission_to_summary(s) for s in submissions]
 
@@ -317,34 +629,53 @@ async def create_or_update_submission(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Create or update a submission for the current week.
-    If a draft exists for this week, it will be updated.
+    Create or update a submission for the selected week.
+    If a draft exists for that week, it will be updated.
     """
-    week_id = get_week_id()
+    week_id = parse_submission_week_id(data.week_id)
+
+    if is_future_week(week_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You can only submit the current week or recent past weeks.",
+        )
+
     week_start, week_end = get_week_boundaries(week_id)
 
     if not can_submit_for_week(week_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="The submission window for this week is currently closed.",
+            detail="The submission window for the selected week is currently closed.",
         )
+
+    total_hours = calculate_total_hours(data)
+    project = await _get_submission_project_or_403(data.project_id, current_user)
     
     # Check for existing submission
-    existing = await Submission.find_one(
-        Submission.user_id == str(current_user.id),
-        Submission.week_id == week_id
-    )
+    existing = await get_submission_for_user_week_project(str(current_user.id), week_id, data.project_id)
+
+    if existing is None and not is_week_inside_backfill_window(week_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"You can only start submissions for the current week and the previous {MAX_SELECTABLE_SUBMISSION_WEEKS - 1} weeks.",
+        )
     
     if existing:
+        if existing.status == SubmissionStatus.REVIEWED:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Reviewed submissions cannot be edited.",
+            )
+
         # Allow updating - if already submitted, revert to draft
+        reverted_from_submitted = existing.status != SubmissionStatus.DRAFT
         if existing.status != SubmissionStatus.DRAFT:
             logger.info("Reverting submitted entry to draft for %s", current_user.email)
-            # Undo the stat increment that was applied when first submitted
-            current_user.total_submissions = max(0, current_user.total_submissions - 1)
-            current_user.total_hours = max(0.0, current_user.total_hours - existing.total_hours)
-            await current_user.save()
             existing.status = SubmissionStatus.DRAFT
             existing.submitted_at = None
+            existing.reviewed_by = None
+            existing.reviewed_at = None
+            existing.admin_notes = None
         
         # Update existing submission
         existing.past_work = data.past_work
@@ -354,17 +685,24 @@ async def create_or_update_submission(
         existing.notes = data.notes
         existing.mood_rating = data.mood_rating
         existing.custom_responses = data.custom_responses
-        existing.total_hours = calculate_total_hours(data)
+        existing.total_hours = total_hours
+        existing.project_name = project.name
         existing.updated_at = utc_now()
         
         await existing.save()
+        all_entries = list(data.past_work) + list(data.present_work) + list(data.future_work)
+        await apply_work_item_status_updates(all_entries, current_user)
+        if reverted_from_submitted:
+            await refresh_user_submission_stats(current_user)
         return submission_to_response(existing)
-    
+
     # Create new submission
     submission = Submission(
         user_id=str(current_user.id),
         user_email=current_user.email,
         user_name=current_user.name,
+        project_id=str(project.id),
+        project_name=project.name,
         week_id=week_id,
         week_start=week_start,
         week_end=week_end,
@@ -375,13 +713,15 @@ async def create_or_update_submission(
         notes=data.notes,
         mood_rating=data.mood_rating,
         custom_responses=data.custom_responses,
-        total_hours=calculate_total_hours(data),
+        total_hours=total_hours,
         status=SubmissionStatus.DRAFT,
         created_at=utc_now(),
         updated_at=utc_now(),
     )
-    
+
     await submission.insert()
+    all_entries = list(data.past_work) + list(data.present_work) + list(data.future_work)
+    await apply_work_item_status_updates(all_entries, current_user)
     return submission_to_response(submission)
 
 
@@ -425,10 +765,19 @@ async def get_submission(
     # Users can only view their own submissions unless they have operations access
     access = await get_admin_access_context(current_user)
     if str(current_user.id) != submission.user_id and not access.has_any_scope(AdminAccessScope.REVIEW_SUBMISSIONS):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to view this submission"
-        )
+        project_id = getattr(submission, "project_id", None)
+        if not project_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to view this submission"
+            )
+
+        project = await _get_submission_project_for_view(project_id, current_user)
+        if not can_view_project_submission(project, current_user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to view this submission"
+            )
     
     return submission_to_response(submission)
 
@@ -470,8 +819,10 @@ async def submit_submission(
     if not can_submit_for_week(submission.week_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="The submission window for this week is currently closed.",
+            detail="The submission window for the selected week is currently closed.",
         )
+
+    sync_submission_total_hours(submission)
     
     submission.status = SubmissionStatus.SUBMITTED
     submission.submitted_at = utc_now()
@@ -482,23 +833,7 @@ async def submit_submission(
     
     await submission.save()
     
-    # Update user stats
-    current_user.total_submissions += 1
-    current_user.total_hours += submission.total_hours
-    
-    # Calculate streak — check if previous week had a submission
-    prev_week = get_previous_week_id(submission.week_id)
-    prev_sub = await Submission.find_one(
-        Submission.user_id == str(current_user.id),
-        Submission.week_id == prev_week,
-        Submission.status != SubmissionStatus.DRAFT
-    )
-    if prev_sub:
-        current_user.submission_streak = (current_user.submission_streak or 0) + 1
-    else:
-        current_user.submission_streak = 1
-    
-    await current_user.save()
+    await refresh_user_submission_stats(current_user)
     
     return submission_to_response(submission)
 
@@ -539,4 +874,89 @@ async def review_submission(
     
     await submission.save()
     
+    return submission_to_response(submission)
+
+
+_DELETE_WINDOW_DAYS = 7
+
+
+@router.delete(
+    "/{submission_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(rate_limit_by_user("submission_writes"))],
+)
+async def delete_submission(
+    submission_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Delete a submission.
+
+    Owners may delete their own draft or submitted submissions within 7 days of
+    submission (or creation for drafts). Reviewed submissions and anything older
+    than 7 days require admin access.
+    """
+    try:
+        submission = await Submission.get(ObjectId(submission_id))
+    except Exception:
+        submission = None
+
+    if submission is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found")
+
+    access = await get_admin_access_context(current_user)
+    is_admin = access.has_any_scope(AdminAccessScope.REVIEW_SUBMISSIONS)
+    is_owner = str(submission.user_id) == str(current_user.id)
+
+    if not is_owner and not is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorised to delete this submission")
+
+    if not is_admin:
+        if submission.status == SubmissionStatus.REVIEWED:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Reviewed submissions cannot be deleted",
+            )
+        reference_time = submission.submitted_at or submission.created_at
+        if utc_now() - reference_time > timedelta(days=_DELETE_WINDOW_DAYS):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Submissions can only be deleted within {_DELETE_WINDOW_DAYS} days of submission",
+            )
+
+    await submission.delete()
+    return None
+
+
+@project_router.get("/{project_id}/submissions", response_model=List[SubmissionSummary])
+async def get_project_submissions(
+    project_id: str,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    current_user: User = Depends(get_current_user),
+):
+    """List all submissions visible within a project."""
+    await _get_submission_project_for_view(project_id, current_user)
+    submissions = await Submission.find({"project_id": project_id}).sort(-Submission.week_start).skip(skip).limit(limit).to_list()
+    return [submission_to_summary(submission) for submission in submissions]
+
+
+@project_router.get("/{project_id}/submissions/{submission_id}", response_model=SubmissionResponse)
+async def get_project_submission(
+    project_id: str,
+    submission_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Get a single project-scoped submission."""
+    await _get_submission_project_for_view(project_id, current_user)
+    try:
+        submission = await Submission.get(ObjectId(submission_id))
+    except Exception:
+        submission = None
+
+    if submission is None or submission.project_id != project_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Submission not found",
+        )
+
     return submission_to_response(submission)

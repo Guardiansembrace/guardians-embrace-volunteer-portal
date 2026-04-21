@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
     AlertCircle,
@@ -6,27 +6,34 @@ import {
     Calendar,
     Flag,
     Layers3,
+    Mail,
     Plus,
     ShieldCheck,
     Trash2,
     User as UserIcon,
     UserPlus,
+    Users,
 } from 'lucide-react';
 
 import { Navbar, Footer } from '../components/Layout';
-import { Button, EmptyState, LoadingSpinner } from '../components/ui';
+import { Button, EmptyState, GuidancePanel, LoadingSpinner } from '../components/ui';
 import { Logo } from '../components/Logo';
+import FileUpload from '../components/FileUpload';
 import { api } from '../lib/api';
-import type { Project, ProjectJoinRequest, ProjectWorkItem, ProjectWorkItemCreate, User } from '../lib/api';
+import type { Project, ProjectJoinRequest, ProjectUserSummary, ProjectWorkItem, ProjectWorkItemCreate, User } from '../lib/api';
 import {
     buildAssignableUsers,
+    buildProjectTeamMembers,
     canAssignProjectWork,
     canContributeToProject,
+    canDirectlyDeleteProject,
     canDeleteProjectWorkItem,
     canEditProjectTags,
     canEditProjectWorkItem,
     canManageProjectWork,
     canRequestProjectAccess,
+    canRequestProjectDeletion,
+    canRequestProjectLeadership,
     formatTagLabel,
     getWorkItemAssigneeIds,
     getWorkItemAssigneeNames,
@@ -95,10 +102,29 @@ function formatInputDate(value?: string) {
     return value ? value.slice(0, 10) : '';
 }
 
+function getProjectUserDisplayName(user?: Pick<ProjectUserSummary, 'name' | 'email' | 'invited_only'> | null) {
+    if (!user) return '';
+    if (user.invited_only) return user.email;
+    return user.name || user.email;
+}
+
+function getProjectUserInitials(user: Pick<ProjectUserSummary, 'name' | 'email' | 'invited_only'>) {
+    return getProjectUserDisplayName(user)
+        .split(/[\s@._-]+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((part) => part.charAt(0).toUpperCase())
+        .join('') || 'U';
+}
+
 function getProjectLeadDisplayName(lead: Project['lead']) {
-    if (!lead) return '';
-    if (lead.invited_only) return lead.email;
-    return lead.name || lead.email;
+    return getProjectUserDisplayName(lead);
+}
+
+function getProjectRequestLabel(requestType: ProjectJoinRequest['request_type']) {
+    if (requestType === 'lead') return 'Leadership Request';
+    if (requestType === 'delete') return 'Delete Request';
+    return 'Access Request';
 }
 
 function normalizeAssigneeIds(ids: string[]) {
@@ -166,15 +192,19 @@ export default function ProjectDetailPage() {
     const [workItemForm, setWorkItemForm] = useState<WorkItemFormState>(EMPTY_WORK_ITEM_FORM);
     const [isSaving, setIsSaving] = useState(false);
     const [showTagEditor, setShowTagEditor] = useState(false);
+    const [showDeleteRequestModal, setShowDeleteRequestModal] = useState(false);
     const [tagDraft, setTagDraft] = useState<string[]>([]);
     const [newTagValue, setNewTagValue] = useState('');
     const [isSavingTags, setIsSavingTags] = useState(false);
-    const [joinRequestMessage, setJoinRequestMessage] = useState('');
-    const [isRequestingAccess, setIsRequestingAccess] = useState(false);
+    const [accessRequestMessage, setAccessRequestMessage] = useState('');
+    const [leadRequestMessage, setLeadRequestMessage] = useState('');
+    const [deleteRequestMessage, setDeleteRequestMessage] = useState('');
+    const [requestingRequestType, setRequestingRequestType] = useState<ProjectJoinRequest['request_type'] | null>(null);
     const [reviewingRequestId, setReviewingRequestId] = useState<string | null>(null);
     const [takingWorkItemId, setTakingWorkItemId] = useState<string | null>(null);
+    const [myWorkItemHours, setMyWorkItemHours] = useState<Record<string, number>>({});
 
-    const loadData = async () => {
+    const loadData = useCallback(async () => {
         if (!projectId) {
             setErrorMessage('Project not found.');
             setIsLoading(false);
@@ -203,11 +233,34 @@ export default function ProjectDetailPage() {
         } finally {
             setIsLoading(false);
         }
-    };
+    }, [projectId]);
 
     useEffect(() => {
         loadData();
-    }, [projectId]);
+    }, [loadData]);
+
+    useEffect(() => {
+        if (!projectId || !user) return;
+        let cancelled = false;
+        (async () => {
+            try {
+                const weekInfo = await api.getCurrentWeekInfo(undefined, projectId);
+                if (cancelled || !weekInfo.submission_id) return;
+                const submission = await api.getSubmission(weekInfo.submission_id);
+                if (cancelled) return;
+                const hoursMap: Record<string, number> = {};
+                for (const entry of [...submission.past_work, ...submission.present_work, ...submission.future_work]) {
+                    if (entry.work_item_id) {
+                        hoursMap[entry.work_item_id] = (hoursMap[entry.work_item_id] ?? 0) + entry.hours;
+                    }
+                }
+                setMyWorkItemHours(hoursMap);
+            } catch {
+                // non-critical — silently ignore
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [projectId, user]);
 
     const roleTags = useMemo(() => getRoleTags(project?.tags), [project?.tags]);
     const topicTags = useMemo(() => getNonRoleTags(project?.tags), [project?.tags]);
@@ -216,12 +269,18 @@ export default function ProjectDetailPage() {
     const canManageWork = Boolean(project && user && canManageProjectWork(project, user));
     const canEditTags = Boolean(project && user && canEditProjectTags(project, user));
     const canRequestAccess = Boolean(project && user && canRequestProjectAccess(project, user));
-    const latestJoinRequest = getLatestJoinRequest(joinRequests);
+    const canRequestLead = Boolean(project && user && canRequestProjectLeadership(project, user));
+    const canRequestDelete = Boolean(project && user && canRequestProjectDeletion(project, user));
+    const canDirectlyDelete = Boolean(user && canDirectlyDeleteProject(user));
+    const latestAccessRequest = getLatestJoinRequest(joinRequests, 'access');
+    const latestLeadRequest = getLatestJoinRequest(joinRequests, 'lead');
+    const latestDeleteRequest = getLatestJoinRequest(joinRequests, 'delete');
     const assignableUsers = project ? buildAssignableUsers(project) : [];
+    const projectTeam = project ? buildProjectTeamMembers(project) : [];
     const editableRoleTags = getRoleTags(tagDraft);
     const editableTopicTags = getNonRoleTags(tagDraft);
     const isCustomWorkItemType = !isSuggestedType(workItemForm.item_type);
-    const pendingJoinRequests = canManageWork
+    const pendingProjectRequests = canManageWork
         ? joinRequests.filter((joinRequest) => joinRequest.status === 'pending')
         : [];
 
@@ -229,6 +288,19 @@ export default function ProjectDetailPage() {
         ...column,
         items: workItems.filter((workItem) => workItem.status === column.value),
     }));
+    const projectBoardGuidelines = [
+        canRequestAccess
+            ? 'Use Request Access if you want to contribute here. Once approved, you can join or be assigned work items.'
+            : canContribute
+                ? 'You already have project access, so this board is your main place to pick up work and track progress.'
+                : 'View-only users can still learn how the project is organized before deciding whether to get involved.',
+        canManageWork
+            ? 'Project leads and operations can approve requests, create work items, assign teammates, and keep statuses current.'
+            : canContribute
+                ? 'Use Take Work or Join Work when you want to add yourself to an open item or collaborate with an existing assignee.'
+                : 'Project members use this board to coordinate assignments, due dates, and shared progress.',
+        'Mark work as Blocked when it is waiting on a decision, approval, missing access, or missing information.',
+    ];
 
     const openCreateModal = () => {
         if (!user) return;
@@ -275,6 +347,14 @@ export default function ProjectDetailPage() {
         setNewTagValue('');
     };
 
+    const openDeleteRequestModal = () => {
+        setShowDeleteRequestModal(true);
+    };
+
+    const closeDeleteRequestModal = () => {
+        setShowDeleteRequestModal(false);
+    };
+
     const toggleRoleTag = (tag: RoleTagValue) => {
         setTagDraft((current) => {
             const next = current.includes(tag)
@@ -315,20 +395,39 @@ export default function ProjectDetailPage() {
         }
     };
 
-    const handleRequestAccess = async (event: React.FormEvent) => {
+    const handleCreateProjectRequest = async (
+        event: React.FormEvent,
+        requestType: ProjectJoinRequest['request_type']
+    ) => {
         event.preventDefault();
         if (!projectId) return;
 
-        setIsRequestingAccess(true);
+        const message = requestType === 'lead'
+            ? leadRequestMessage
+            : requestType === 'delete'
+                ? deleteRequestMessage
+                : accessRequestMessage;
+
+        setRequestingRequestType(requestType);
         try {
-            await api.requestProjectAccess(projectId, { message: joinRequestMessage.trim() || null });
-            setJoinRequestMessage('');
+            await api.requestProjectAccess(projectId, {
+                request_type: requestType,
+                message: message.trim() || null,
+            });
+            if (requestType === 'lead') {
+                setLeadRequestMessage('');
+            } else if (requestType === 'delete') {
+                setDeleteRequestMessage('');
+                closeDeleteRequestModal();
+            } else {
+                setAccessRequestMessage('');
+            }
             await loadData();
         } catch (error) {
-            console.error('Failed to request project access', error);
-            window.alert(error instanceof Error ? error.message : 'Failed to request project access.');
+            console.error('Failed to submit project request', error);
+            window.alert(error instanceof Error ? error.message : 'Failed to submit project request.');
         } finally {
-            setIsRequestingAccess(false);
+            setRequestingRequestType(null);
         }
     };
 
@@ -340,7 +439,14 @@ export default function ProjectDetailPage() {
 
         setReviewingRequestId(joinRequestId);
         try {
-            await api.reviewProjectJoinRequest(projectId, joinRequestId, nextStatus);
+            const reviewedRequest = await api.reviewProjectJoinRequest(projectId, joinRequestId, nextStatus);
+            if (reviewedRequest.request_type === 'delete' && reviewedRequest.status === 'approved') {
+                navigate('/projects', {
+                    replace: true,
+                    state: { successMessage: 'Project deleted successfully.' },
+                });
+                return;
+            }
             await loadData();
         } catch (error) {
             console.error('Failed to review join request', error);
@@ -561,7 +667,7 @@ export default function ProjectDetailPage() {
                                                 {project.lead ? (
                                                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
                                                         <span style={{ color: '#0f172a', fontWeight: 700 }}>
-                                                            {formatTagLabel(project.lead.role)}:
+                                                            Project Lead:
                                                         </span>
                                                         <span style={{ color: '#0f172a', fontWeight: 600 }}>
                                                             {getProjectLeadDisplayName(project.lead)}
@@ -569,6 +675,9 @@ export default function ProjectDetailPage() {
                                                         {!project.lead.invited_only && (
                                                             <span style={{ color: '#64748b' }}>{project.lead.email}</span>
                                                         )}
+                                                        <span style={{ display: 'inline-flex', alignItems: 'center', borderRadius: '999px', padding: '0.15rem 0.55rem', background: '#f8fafc', border: '1px solid #e2e8f0', color: '#475569', fontSize: '0.72rem', fontWeight: 700 }}>
+                                                            {formatTagLabel(project.lead.role)} account
+                                                        </span>
                                                         {project.lead.invited_only && (
                                                             <span style={{ color: '#b45309', fontWeight: 600 }}>Pending login</span>
                                                         )}
@@ -586,21 +695,47 @@ export default function ProjectDetailPage() {
                                 </div>
                             </div>
                             
-                            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                                {canEditTags && (
-                                    <Button type="button" variant="secondary" onClick={openTagEditor}>
-                                        <Flag size={16} style={{ marginRight: '0.4rem' }} />
-                                        Edit Tags
-                                    </Button>
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.6rem' }}>
+                                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                    {canRequestDelete && latestDeleteRequest?.status !== 'pending' && (
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            onClick={openDeleteRequestModal}
+                                            style={{ borderColor: '#fecaca', color: '#dc2626' }}
+                                        >
+                                            <Trash2 size={16} style={{ marginRight: '0.4rem' }} />
+                                            Request Deletion
+                                        </Button>
+                                    )}
+                                    {canEditTags && (
+                                        <Button type="button" variant="secondary" onClick={openTagEditor}>
+                                            <Flag size={16} style={{ marginRight: '0.4rem' }} />
+                                            Edit Tags
+                                        </Button>
+                                    )}
+                                    {canContribute ? (
+                                        <Button type="button" onClick={openCreateModal} style={{ boxShadow: '0 4px 12px rgba(212, 175, 55, 0.3)' }}>
+                                            <Plus size={18} style={{ marginRight: '0.5rem' }} />
+                                            New Work Item
+                                        </Button>
+                                    ) : (
+                                        <div style={{ borderRadius: '999px', padding: '0.4rem 1rem', background: '#f8fafc', border: '1px solid #e2e8f0', color: '#475569', fontWeight: 700, fontSize: '0.85rem' }}>
+                                            Read Only
+                                        </div>
+                                    )}
+                                </div>
+
+                                {canRequestDelete && latestDeleteRequest?.status === 'pending' && (
+                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', borderRadius: '999px', padding: '0.45rem 0.9rem', background: '#fff5f5', border: '1px solid #fecaca', color: '#b91c1c', fontWeight: 600, fontSize: '0.82rem' }}>
+                                        <LoadingSpinner size={14} />
+                                        Deletion request pending since {formatShortDate(latestDeleteRequest.requested_at)}
+                                    </div>
                                 )}
-                                {canContribute ? (
-                                    <Button type="button" onClick={openCreateModal} style={{ boxShadow: '0 4px 12px rgba(212, 175, 55, 0.3)' }}>
-                                        <Plus size={18} style={{ marginRight: '0.5rem' }} />
-                                        New Work Item
-                                    </Button>
-                                ) : (
-                                    <div style={{ borderRadius: '999px', padding: '0.4rem 1rem', background: '#f8fafc', border: '1px solid #e2e8f0', color: '#475569', fontWeight: 700, fontSize: '0.85rem' }}>
-                                        Read Only
+
+                                {canRequestDelete && latestDeleteRequest?.status === 'declined' && (
+                                    <div style={{ color: '#b45309', fontSize: '0.82rem', fontWeight: 600 }}>
+                                        Your previous deletion request was declined. You can send another.
                                     </div>
                                 )}
                             </div>
@@ -616,8 +751,123 @@ export default function ProjectDetailPage() {
                         </div>
                     )}
 
+                    <GuidancePanel
+                        title="How This Project Board Works"
+                        description="These short rules help volunteers understand what they can do from the board based on their current access."
+                        items={projectBoardGuidelines}
+                        icon={<Layers3 size={18} />}
+                        tone="slate"
+                        style={{ marginBottom: '2rem' }}
+                    />
+
+                    <div style={{ marginBottom: '2rem', background: 'white', borderRadius: '16px', border: '1px solid #e2e8f0', padding: '1.5rem', boxShadow: '0 4px 15px rgba(15, 23, 42, 0.04)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+                            <div>
+                                <h3 style={{ margin: '0 0 0.35rem 0', fontSize: '1.1rem', fontWeight: 800, color: '#0f172a' }}>Project Team</h3>
+                                <p style={{ margin: 0, color: '#64748b', fontSize: '0.92rem' }}>
+                                    Everyone currently attached to this board, including the assigned lead.
+                                </p>
+                            </div>
+                            <div style={{ display: 'inline-flex', alignItems: 'center', borderRadius: '999px', padding: '0.4rem 0.9rem', background: '#f8fafc', border: '1px solid #e2e8f0', color: '#475569', fontWeight: 700, fontSize: '0.82rem' }}>
+                                {projectTeam.length} {projectTeam.length === 1 ? 'person' : 'people'}
+                            </div>
+                        </div>
+
+                        {projectTeam.length > 0 ? (
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '0.75rem' }}>
+                                {projectTeam.map((member) => {
+                                    const isLead = project.lead?.id === member.id;
+                                    const displayName = getProjectUserDisplayName(member);
+                                    const initials = getProjectUserInitials(member);
+
+                                    return (
+                                        <div
+                                            key={member.id}
+                                            style={{
+                                                background: isLead ? '#fffbeb' : '#f8fafc',
+                                                borderRadius: '14px',
+                                                border: `1px solid ${isLead ? '#fde68a' : '#e2e8f0'}`,
+                                                padding: '1rem',
+                                            }}
+                                        >
+                                            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
+                                                {member.picture ? (
+                                                    <img
+                                                        src={member.picture}
+                                                        alt=""
+                                                        style={{ width: '2.75rem', height: '2.75rem', borderRadius: '999px', objectFit: 'cover', flexShrink: 0, background: '#e2e8f0' }}
+                                                    />
+                                                ) : (
+                                                    <div style={{ width: '2.75rem', height: '2.75rem', borderRadius: '999px', background: '#e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, color: '#475569', flexShrink: 0 }}>
+                                                        {initials}
+                                                    </div>
+                                                )}
+
+                                                <div style={{ minWidth: 0, flex: 1 }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.45rem', marginBottom: '0.45rem' }}>
+                                                        <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 800, color: '#0f172a' }}>{displayName}</h4>
+                                                        {isLead && (
+                                                            <span style={{ display: 'inline-flex', alignItems: 'center', borderRadius: '999px', padding: '0.15rem 0.55rem', background: '#fef3c7', border: '1px solid #fde68a', color: '#92400e', fontSize: '0.72rem', fontWeight: 700 }}>
+                                                                Project Lead
+                                                            </span>
+                                                        )}
+                                                        {member.invited_only && (
+                                                            <span style={{ display: 'inline-flex', alignItems: 'center', borderRadius: '999px', padding: '0.15rem 0.55rem', background: '#fff7ed', border: '1px solid #fed7aa', color: '#c2410c', fontSize: '0.72rem', fontWeight: 700 }}>
+                                                                Pending login
+                                                            </span>
+                                                        )}
+                                                    </div>
+
+                                                    <div style={{ display: 'grid', gap: '0.35rem', fontSize: '0.85rem', color: '#64748b' }}>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                                            <UserIcon size={14} style={{ color: '#94a3b8' }} />
+                                                            <span>{formatTagLabel(member.role)} account</span>
+                                                        </div>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', minWidth: 0 }}>
+                                                            <Mail size={14} style={{ color: '#94a3b8', flexShrink: 0 }} />
+                                                            <a href={`mailto:${member.email}`} style={{ color: 'inherit', textDecoration: 'none', minWidth: 0, overflowWrap: 'anywhere' }}>
+                                                                {member.email}
+                                                            </a>
+                                                        </div>
+                                                        {member.team && (
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                                                <Users size={14} style={{ color: '#94a3b8' }} />
+                                                                <span>{member.team}</span>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        ) : (
+                            <p style={{ margin: 0, color: '#64748b', fontSize: '0.92rem' }}>
+                                No lead or members are assigned to this project yet.
+                            </p>
+                        )}
+                    </div>
+
+                    {canContribute && (
+                        <div style={{ marginBottom: '2rem', background: 'white', borderRadius: '16px', border: '1px solid #e2e8f0', padding: '1.5rem', boxShadow: '0 4px 15px rgba(15, 23, 42, 0.04)' }}>
+                            <div style={{ marginBottom: '1rem' }}>
+                                <h3 style={{ margin: '0 0 0.35rem 0', fontSize: '1.1rem', fontWeight: 800, color: '#0f172a' }}>Project Files</h3>
+                                <p style={{ margin: 0, color: '#64748b', fontSize: '0.92rem' }}>
+                                    Upload shared files for this project. Everyone on the project can see them here.
+                                </p>
+                            </div>
+                            <FileUpload
+                                projectId={project.id}
+                                sourceType="project"
+                                canDelete={canManageWork}
+                                leadEmail={project.lead?.email}
+                            />
+                        </div>
+                    )}
+
                     {/* Join / Access Management Sections */}
-                    {(canRequestAccess || (canManageWork && pendingJoinRequests.length > 0)) && (
+                    {(canRequestAccess || canRequestLead || (canManageWork && pendingProjectRequests.length > 0)) && (
                         <div style={{ marginBottom: '2.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                             {canRequestAccess && (
                                 <div style={{ background: 'white', borderRadius: '16px', border: '1px solid #fde68a', padding: '1.5rem', boxShadow: '0 4px 15px rgba(212, 175, 55, 0.05)', position: 'relative', overflow: 'hidden' }}>
@@ -632,30 +882,30 @@ export default function ProjectDetailPage() {
                                         You can view all tasks, but you need access to be assigned work items.
                                     </p>
                                     
-                                    {latestJoinRequest?.status === 'pending' ? (
+                                    {latestAccessRequest?.status === 'pending' ? (
                                         <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', borderRadius: '8px', padding: '0.5rem 1rem', background: '#f8fafc', border: '1px solid #e2e8f0', color: '#475569', fontWeight: 600, fontSize: '0.9rem' }}>
                                             <LoadingSpinner size={14} />
-                                            Request pending approval since {formatShortDate(latestJoinRequest.requested_at)}
+                                            Request pending approval since {formatShortDate(latestAccessRequest.requested_at)}
                                         </div>
                                     ) : (
-                                        <form onSubmit={handleRequestAccess} style={{ background: '#f8fafc', padding: '1rem', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
+                                        <form onSubmit={(event) => handleCreateProjectRequest(event, 'access')} style={{ background: '#f8fafc', padding: '1rem', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
                                             <div style={{ marginBottom: '1rem' }}>
                                                 <label htmlFor="project-join-request-message" style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, color: '#475569', marginBottom: '0.4rem' }}>Why do you want to join? (Optional)</label>
                                                 <textarea
                                                     id="project-join-request-message"
                                                     className="form-textarea"
                                                     rows={2}
-                                                    value={joinRequestMessage}
-                                                    onChange={(event) => setJoinRequestMessage(event.target.value)}
+                                                    value={accessRequestMessage}
+                                                    onChange={(event) => setAccessRequestMessage(event.target.value)}
                                                     placeholder="Let the project lead know how you can help..."
                                                     style={{ background: 'white', borderColor: '#cbd5e1' }}
                                                 />
                                             </div>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
                                                 <span style={{ fontSize: '0.85rem', color: '#94a3b8' }}>
-                                                    {latestJoinRequest?.status === 'declined' ? 'Your previous request was declined. You may try again.' : 'Project leads can approve your request.'}
+                                                    {latestAccessRequest?.status === 'declined' ? 'Your previous request was declined. You may try again.' : 'Project leads can approve your request.'}
                                                 </span>
-                                                <Button type="submit" isLoading={isRequestingAccess} size="sm">
+                                                <Button type="submit" isLoading={requestingRequestType === 'access'} size="sm">
                                                     Request Access
                                                 </Button>
                                             </div>
@@ -664,21 +914,71 @@ export default function ProjectDetailPage() {
                                 </div>
                             )}
 
-                            {canManageWork && pendingJoinRequests.length > 0 && (
+                            {canRequestLead && (
+                                <div style={{ background: 'white', borderRadius: '16px', border: '1px solid #c7d2fe', padding: '1.5rem', boxShadow: '0 4px 15px rgba(99, 102, 241, 0.08)', position: 'relative', overflow: 'hidden' }}>
+                                    <div style={{ position: 'absolute', top: 0, left: 0, bottom: 0, width: '4px', background: '#6366f1' }} />
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem', color: '#0f172a' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '32px', height: '32px', borderRadius: '8px', background: '#eef2ff', color: '#4338ca' }}>
+                                            <ShieldCheck size={18} />
+                                        </div>
+                                        <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 800 }}>Request to Lead This Project</h3>
+                                    </div>
+                                    <p style={{ margin: '0 0 1rem 0', color: '#64748b', fontSize: '0.95rem' }}>
+                                        Want to coordinate this project? Send a short note and an existing lead or operations user can review it.
+                                    </p>
+
+                                    {latestLeadRequest?.status === 'pending' ? (
+                                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', borderRadius: '8px', padding: '0.5rem 1rem', background: '#f8fafc', border: '1px solid #e2e8f0', color: '#475569', fontWeight: 600, fontSize: '0.9rem' }}>
+                                            <LoadingSpinner size={14} />
+                                            Leadership request pending since {formatShortDate(latestLeadRequest.requested_at)}
+                                        </div>
+                                    ) : (
+                                        <form onSubmit={(event) => handleCreateProjectRequest(event, 'lead')} style={{ background: '#f8fafc', padding: '1rem', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
+                                            <div style={{ marginBottom: '1rem' }}>
+                                                <label htmlFor="project-lead-request-message" style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, color: '#475569', marginBottom: '0.4rem' }}>Why do you want to lead? (Optional)</label>
+                                                <textarea
+                                                    id="project-lead-request-message"
+                                                    className="form-textarea"
+                                                    rows={2}
+                                                    value={leadRequestMessage}
+                                                    onChange={(event) => setLeadRequestMessage(event.target.value)}
+                                                    placeholder="Share how you would coordinate the project..."
+                                                    style={{ background: 'white', borderColor: '#cbd5e1' }}
+                                                />
+                                            </div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+                                                <span style={{ fontSize: '0.85rem', color: '#94a3b8' }}>
+                                                    {latestLeadRequest?.status === 'declined' ? 'Your previous leadership request was declined. You may try again.' : 'Leadership requests can be approved by the current lead or operations team.'}
+                                                </span>
+                                                <Button type="submit" isLoading={requestingRequestType === 'lead'} size="sm" variant="secondary">
+                                                    Request Lead Role
+                                                </Button>
+                                            </div>
+                                        </form>
+                                    )}
+                                </div>
+                            )}
+
+                            {canManageWork && pendingProjectRequests.length > 0 && (
                                 <div style={{ background: 'white', borderRadius: '16px', border: '1px solid #e0e7ff', padding: '1.5rem', boxShadow: '0 4px 15px rgba(59, 130, 246, 0.05)', position: 'relative', overflow: 'hidden' }}>
                                     <div style={{ position: 'absolute', top: 0, left: 0, bottom: 0, width: '4px', background: '#3b82f6' }} />
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem', color: '#0f172a' }}>
                                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '32px', height: '32px', borderRadius: '8px', background: '#eff6ff', color: '#1d4ed8' }}>
                                             <UserPlus size={18} />
                                         </div>
-                                        <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 800 }}>Pending Join Requests ({pendingJoinRequests.length})</h3>
+                                        <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 800 }}>Pending Project Requests ({pendingProjectRequests.length})</h3>
                                     </div>
                                     
                                     <div style={{ display: 'grid', gap: '0.75rem' }}>
-                                        {pendingJoinRequests.map((joinRequest) => (
+                                        {pendingProjectRequests.map((joinRequest) => (
                                             <div key={joinRequest.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '1rem' }}>
                                                 <div>
-                                                    <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '0.95rem' }}>{joinRequest.user_name}</div>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                                        <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '0.95rem' }}>{joinRequest.user_name}</div>
+                                                        <span style={{ display: 'inline-flex', alignItems: 'center', borderRadius: '999px', padding: '0.2rem 0.6rem', background: joinRequest.request_type === 'lead' ? '#eef2ff' : joinRequest.request_type === 'delete' ? '#fef2f2' : '#fffbeb', color: joinRequest.request_type === 'lead' ? '#4338ca' : joinRequest.request_type === 'delete' ? '#dc2626' : '#b45309', fontSize: '0.72rem', fontWeight: 700, letterSpacing: '0.03em', textTransform: 'uppercase' }}>
+                                                            {getProjectRequestLabel(joinRequest.request_type)}
+                                                        </span>
+                                                    </div>
                                                     <div style={{ color: '#64748b', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                                         {joinRequest.user_email} <span>•</span> Requested {formatShortDate(joinRequest.requested_at)}
                                                     </div>
@@ -687,15 +987,22 @@ export default function ProjectDetailPage() {
                                                             "{joinRequest.message}"
                                                         </div>
                                                     )}
+                                                    {joinRequest.request_type === 'delete' && !canDirectlyDelete && (
+                                                        <div style={{ marginTop: '0.5rem', color: '#b45309', fontSize: '0.85rem', fontWeight: 600 }}>
+                                                            Delete requests need an operations reviewer.
+                                                        </div>
+                                                    )}
                                                 </div>
-                                                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                                    <Button type="button" size="sm" variant="outline" onClick={() => handleReviewJoinRequest(joinRequest.id, 'declined')} disabled={reviewingRequestId === joinRequest.id} style={{ borderColor: '#fecaca', color: '#ef4444' }} className="hover:bg-red-50">
-                                                        Decline
-                                                    </Button>
-                                                    <Button type="button" size="sm" onClick={() => handleReviewJoinRequest(joinRequest.id, 'approved')} disabled={reviewingRequestId === joinRequest.id} style={{ background: '#3b82f6' }}>
-                                                        Approve
-                                                    </Button>
-                                                </div>
+                                                {joinRequest.request_type !== 'delete' || canDirectlyDelete ? (
+                                                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                                        <Button type="button" size="sm" variant="outline" onClick={() => handleReviewJoinRequest(joinRequest.id, 'declined')} disabled={reviewingRequestId === joinRequest.id} style={{ borderColor: '#fecaca', color: '#ef4444' }} className="hover:bg-red-50">
+                                                            Decline
+                                                        </Button>
+                                                        <Button type="button" size="sm" onClick={() => handleReviewJoinRequest(joinRequest.id, 'approved')} disabled={reviewingRequestId === joinRequest.id} style={{ background: '#3b82f6' }}>
+                                                            Approve
+                                                        </Button>
+                                                    </div>
+                                                ) : null}
                                             </div>
                                         ))}
                                     </div>
@@ -733,6 +1040,7 @@ export default function ProjectDetailPage() {
                                                 onTakeWork={() => handleTakeWorkItem(workItem)}
                                                 onDelete={() => handleDeleteWorkItem(workItem)}
                                                 isTakingWork={takingWorkItemId === workItem.id}
+                                                loggedHours={myWorkItemHours[workItem.id]}
                                             />
                                         ))
                                     ) : (
@@ -966,6 +1274,60 @@ export default function ProjectDetailPage() {
                 </div>
             )}
 
+            {showDeleteRequestModal && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', zIndex: 1000 }}>
+                    <div style={{ width: '100%', maxWidth: '560px', background: '#ffffff', borderRadius: '20px', padding: '2rem', boxShadow: '0 20px 40px rgba(0, 0, 0, 0.2)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem', paddingBottom: '1rem', borderBottom: '1px solid #e2e8f0' }}>
+                            <div>
+                                <h2 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 800, color: '#0f172a' }}>Request Project Deletion</h2>
+                                <p style={{ margin: '0.35rem 0 0', color: '#64748b', fontSize: '0.95rem' }}>
+                                    Ask an operations reviewer to archive and remove this project.
+                                </p>
+                            </div>
+                            <button type="button" onClick={closeDeleteRequestModal} style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '0.5rem', borderRadius: '50%' }} className="hover:bg-slate-100 hover:text-slate-700">
+                                <Plus size={24} style={{ transform: 'rotate(45deg)' }} />
+                            </button>
+                        </div>
+
+                        <form onSubmit={(event) => handleCreateProjectRequest(event, 'delete')} style={{ display: 'grid', gap: '1.25rem' }}>
+                            <div>
+                                <label htmlFor="project-delete-request-message" style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, color: '#475569', marginBottom: '0.4rem' }}>Why should this project be deleted? (Optional)</label>
+                                <textarea
+                                    id="project-delete-request-message"
+                                    className="form-textarea"
+                                    rows={4}
+                                    value={deleteRequestMessage}
+                                    onChange={(event) => setDeleteRequestMessage(event.target.value)}
+                                    placeholder="Explain why the project should be removed..."
+                                    style={{ background: '#f8fafc', borderColor: '#cbd5e1' }}
+                                />
+                            </div>
+
+                            <div style={{ borderRadius: '14px', padding: '0.9rem 1rem', background: '#fff5f5', border: '1px solid #fecaca', color: '#991b1b', fontSize: '0.9rem', lineHeight: 1.5 }}>
+                                Only operations reviewers can approve project deletion requests.
+                            </div>
+
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', paddingTop: '1rem', borderTop: '1px solid #e2e8f0' }}>
+                                <span style={{ fontSize: '0.85rem', color: '#94a3b8' }}>
+                                    {latestDeleteRequest?.status === 'declined'
+                                        ? 'Your previous deletion request was declined. You may try again.'
+                                        : 'Use this when the project is finished or no longer needed.'}
+                                </span>
+                                <div style={{ display: 'flex', gap: '0.75rem' }}>
+                                    <Button type="button" variant="ghost" onClick={closeDeleteRequestModal}>
+                                        Cancel
+                                    </Button>
+                                    <Button type="submit" isLoading={requestingRequestType === 'delete'} variant="outline" style={{ borderColor: '#fecaca', color: '#dc2626' }}>
+                                        <Trash2 size={16} style={{ marginRight: '0.4rem' }} />
+                                        Send Deletion Request
+                                    </Button>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
             {showTagEditor && (
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', zIndex: 1000 }}>
                     <div style={{ width: '100%', maxWidth: '640px', background: '#ffffff', borderRadius: '20px', padding: '2rem', boxShadow: '0 20px 40px rgba(0, 0, 0, 0.2)' }}>
@@ -1062,6 +1424,7 @@ function WorkItemCard({
     onTakeWork,
     onDelete,
     isTakingWork,
+    loggedHours,
 }: {
     workItem: ProjectWorkItem;
     project: Project;
@@ -1070,6 +1433,7 @@ function WorkItemCard({
     onTakeWork: () => void;
     onDelete: () => void;
     isTakingWork: boolean;
+    loggedHours?: number;
 }) {
     const canEdit = Boolean(currentUser && canEditProjectWorkItem(project, workItem, currentUser));
     const canDelete = Boolean(currentUser && canDeleteProjectWorkItem(project, workItem, currentUser));
@@ -1156,6 +1520,12 @@ function WorkItemCard({
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: new Date(workItem.due_date) < new Date() && workItem.status !== 'finished' ? '#ef4444' : '#64748b' }} title="Due date">
                         <Calendar size={13} />
                         {new Date(workItem.due_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                    </div>
+                )}
+
+                {loggedHours != null && loggedHours > 0 && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', background: '#fef9c3', color: '#854d0e', border: '1px solid #fde68a', borderRadius: '6px', padding: '0.15rem 0.5rem', fontSize: '0.72rem', fontWeight: 700 }} title="Hours you logged against this item this week">
+                        ⏱ {loggedHours % 1 === 0 ? loggedHours : loggedHours.toFixed(1)} hrs this week
                     </div>
                 )}
             </div>

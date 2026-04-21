@@ -106,6 +106,8 @@ export interface WorkEntry {
     hours: number;
     drive_link?: string;
     tags?: string[];
+    work_item_id?: string;
+    work_item_status_update?: 'pending' | 'active' | 'blocked' | 'finished';
 }
 
 export interface Submission {
@@ -113,6 +115,9 @@ export interface Submission {
     user_id: string;
     user_email: string;
     user_name: string;
+    project_id: string;
+    project_name?: string;
+    visibility?: string;
     week_id: string;
     week_start: string;
     week_end: string;
@@ -138,6 +143,8 @@ export interface SubmissionSummary {
     id: string;
     user_id: string;
     user_name: string;
+    project_id: string;
+    project_name?: string;
     week_id: string;
     total_hours: number;
     status: 'draft' | 'submitted' | 'reviewed';
@@ -171,6 +178,16 @@ export interface WeekInfo {
     has_submission: boolean;
     submission_status?: string;
     submission_id?: string;
+}
+
+export interface SelectableSubmissionWeek {
+    week_id: string;
+    week_start: string;
+    week_end: string;
+    is_current: boolean;
+    has_submission: boolean;
+    submission_id?: string;
+    submission_status?: 'draft' | 'submitted' | 'reviewed';
 }
 
 export interface AuthResponse {
@@ -215,12 +232,29 @@ export interface UploadedFile {
     drive_link: string;
     uploaded_at: string;
     storage_type?: string;
+    project_file_id?: string;
+    project_id?: string;
+    project_name?: string;
+    submission_id?: string;
+    work_item_id?: string;
+    source_type?: 'submission' | 'project' | 'work_item';
+    uploaded_by_name?: string;
+    week_id?: string;
+    size_bytes?: number;
 }
 
 export interface PresignedUploadResponse extends UploadedFile {
     upload_url: string;
     method: string;
     headers?: Record<string, string>;
+}
+
+export interface FileUploadContext {
+    week_id?: string;
+    project_id?: string;
+    submission_id?: string;
+    work_item_id?: string;
+    source_type?: 'submission' | 'project' | 'work_item';
 }
 
 export interface FileInfo {
@@ -274,6 +308,15 @@ const DEFAULT_WEEKLY_UPDATE_SETTINGS: WeeklyUpdateSettings = {
     allow_late_submissions: true,
     timezone: 'America/New_York',
 };
+
+interface CacheEntry {
+    expiresAt: number;
+    value: unknown;
+}
+
+const SHORT_LIVED_CACHE_TTL_MS = 5_000;
+const DEFAULT_GET_CACHE_TTL_MS = 15_000;
+const LONG_LIVED_CACHE_TTL_MS = 5 * 60_000;
 
 function normalizeWeekInfo(data: WeekInfo): WeekInfo {
     return {
@@ -369,6 +412,7 @@ export interface ProjectJoinRequest {
     user_id: string;
     user_email: string;
     user_name: string;
+    request_type: 'access' | 'lead' | 'delete';
     message?: string;
     status: 'pending' | 'approved' | 'declined';
     requested_at: string;
@@ -378,6 +422,7 @@ export interface ProjectJoinRequest {
 }
 
 export interface ProjectJoinRequestCreate {
+    request_type?: 'access' | 'lead' | 'delete';
     message?: string | null;
 }
 
@@ -402,12 +447,18 @@ export interface InviteCreate {
 export class ApiClient {
     private token: string | null = null;
     private readonly onUnauthorized: (path: string) => void;
+    private readonly responseCache = new Map<string, CacheEntry>();
+    private readonly inFlightRequests = new Map<string, Promise<unknown>>();
+    private cacheRevision = 0;
 
     constructor(onUnauthorized: (path: string) => void = (path) => window.location.assign(path)) {
         this.onUnauthorized = onUnauthorized;
     }
 
     setToken(token: string) {
+        if (this.token !== token) {
+            this.resetCaches();
+        }
         this.token = token;
         localStorage.setItem('auth_token', token);
     }
@@ -421,10 +472,43 @@ export class ApiClient {
     clearToken() {
         this.token = null;
         localStorage.removeItem('auth_token');
+        this.resetCaches();
     }
 
     private redirectToLogin() {
         this.onUnauthorized('/login');
+    }
+
+    private resetCaches() {
+        this.responseCache.clear();
+        this.inFlightRequests.clear();
+        this.cacheRevision += 1;
+    }
+
+    private getCacheKey(endpoint: string, method = 'GET') {
+        return `${method.toUpperCase()} ${endpoint}`;
+    }
+
+    private invalidateCacheByPrefix(...prefixes: string[]) {
+        if (prefixes.length === 0) {
+            return;
+        }
+
+        const cachePrefixes = prefixes.map((prefix) => this.getCacheKey(prefix));
+
+        for (const key of Array.from(this.responseCache.keys())) {
+            if (cachePrefixes.some((prefix) => key.startsWith(prefix))) {
+                this.responseCache.delete(key);
+            }
+        }
+
+        for (const key of Array.from(this.inFlightRequests.keys())) {
+            if (cachePrefixes.some((prefix) => key.startsWith(prefix))) {
+                this.inFlightRequests.delete(key);
+            }
+        }
+
+        this.cacheRevision += 1;
     }
 
     private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
@@ -460,6 +544,39 @@ export class ApiClient {
         return response.json();
     }
 
+    private async cachedGet<T>(endpoint: string, cacheTtlMs = DEFAULT_GET_CACHE_TTL_MS): Promise<T> {
+        const cacheKey = this.getCacheKey(endpoint);
+        const now = Date.now();
+        const cached = this.responseCache.get(cacheKey);
+
+        if (cached && cached.expiresAt > now) {
+            return cached.value as T;
+        }
+
+        const inFlight = this.inFlightRequests.get(cacheKey);
+        if (inFlight) {
+            return inFlight as Promise<T>;
+        }
+
+        const revisionAtStart = this.cacheRevision;
+        const requestPromise = this.request<T>(endpoint)
+            .then((data) => {
+                if (cacheTtlMs > 0 && revisionAtStart === this.cacheRevision) {
+                    this.responseCache.set(cacheKey, {
+                        value: data,
+                        expiresAt: Date.now() + cacheTtlMs,
+                    });
+                }
+                return data;
+            })
+            .finally(() => {
+                this.inFlightRequests.delete(cacheKey);
+            });
+
+        this.inFlightRequests.set(cacheKey, requestPromise);
+        return requestPromise;
+    }
+
     // Auth
     async loginWithGoogle(accessToken: string): Promise<AuthResponse> {
         const response = await this.request<AuthResponse>('/auth/google', {
@@ -476,14 +593,16 @@ export class ApiClient {
 
     // Users
     async getCurrentUser(): Promise<User> {
-        return this.request<User>('/users/me');
+        return this.cachedGet<User>('/users/me', DEFAULT_GET_CACHE_TTL_MS);
     }
 
     async setName(fullName: string): Promise<User> {
-        return this.request<User>('/users/me/set-name', {
+        const response = await this.request<User>('/users/me/set-name', {
             method: 'POST',
             body: JSON.stringify({ full_name: fullName }),
         });
+        this.invalidateCacheByPrefix('/users');
+        return response;
     }
 
     async getAllUsers(params?: Record<string, string | number | boolean | undefined>): Promise<User[]> {
@@ -493,18 +612,18 @@ export class ApiClient {
                 if (value !== undefined) queryParams.append(key, String(value));
             });
         }
-        return this.request<User[]>(`/users?${queryParams}`);
+        return this.cachedGet<User[]>(`/users?${queryParams}`, DEFAULT_GET_CACHE_TTL_MS);
     }
 
     async getUserStats() {
-        return this.request<{
+        return this.cachedGet<{
             total_users: number;
             active_users: number;
             inactive_users: number;
             volunteers: number;
             team_leads: number;
             admins: number;
-        }>('/users/stats/overview');
+        }>('/users/stats/overview', DEFAULT_GET_CACHE_TTL_MS);
     }
 
     async updateUser(userId: string, data: {
@@ -513,66 +632,100 @@ export class ApiClient {
         role?: 'volunteer' | 'team_lead' | 'admin';
         is_active?: boolean;
     }): Promise<User> {
-        return this.request<User>(`/users/${userId}`, {
+        const response = await this.request<User>(`/users/${userId}`, {
             method: 'PATCH',
             body: JSON.stringify(data),
         });
+        this.invalidateCacheByPrefix('/users', '/projects');
+        return response;
     }
 
     // Invites
     async getInvites(): Promise<AllowedEmail[]> {
-        return this.request<AllowedEmail[]>('/invites');
+        return this.cachedGet<AllowedEmail[]>('/invites', DEFAULT_GET_CACHE_TTL_MS);
     }
 
     async inviteUser(data: InviteCreate): Promise<AllowedEmail> {
-        return this.request<AllowedEmail>('/invites', {
+        const response = await this.request<AllowedEmail>('/invites', {
             method: 'POST',
             body: JSON.stringify(data),
         });
+        this.invalidateCacheByPrefix('/invites', '/users');
+        return response;
     }
 
     async revokeInvite(email: string): Promise<void> {
-        return this.request<void>(`/invites/${email}`, {
+        const response = await this.request<void>(`/invites/${email}`, {
             method: 'DELETE',
         });
+        this.invalidateCacheByPrefix('/invites', '/users');
+        return response;
     }
 
     async resendInvite(email: string): Promise<void> {
-        return this.request<void>(`/invites/${email}/resend`, {
+        const response = await this.request<void>(`/invites/${email}/resend`, {
             method: 'POST',
         });
+        this.invalidateCacheByPrefix('/invites');
+        return response;
     }
 
     // Submissions
-    async getCurrentWeekInfo(): Promise<WeekInfo> {
-        const data = await this.request<WeekInfo>('/submissions/current-week');
+    async getCurrentWeekInfo(weekId?: string, projectId?: string): Promise<WeekInfo> {
+        const queryParams = new URLSearchParams();
+        if (weekId) queryParams.append('week_id', weekId);
+        if (projectId) queryParams.append('project_id', projectId);
+        const data = await this.cachedGet<WeekInfo>(`/submissions/current-week${queryParams.toString() ? `?${queryParams.toString()}` : ''}`, DEFAULT_GET_CACHE_TTL_MS);
         return normalizeWeekInfo(data);
     }
 
+    async getSelectableSubmissionWeeks(includeWeekId?: string, projectId?: string): Promise<SelectableSubmissionWeek[]> {
+        const queryParams = new URLSearchParams();
+        if (includeWeekId) queryParams.append('include_week_id', includeWeekId);
+        if (projectId) queryParams.append('project_id', projectId);
+        const response = await this.cachedGet<{
+            current_week_id: string;
+            max_backfill_weeks: number;
+            weeks: SelectableSubmissionWeek[];
+        }>(`/submissions/selectable-weeks${queryParams.toString() ? `?${queryParams.toString()}` : ''}`, DEFAULT_GET_CACHE_TTL_MS);
+        return response.weeks;
+    }
+
     async getWorkCategories(): Promise<string[]> {
-        const res = await this.request<{ categories: string[] }>('/submissions/categories');
+        const res = await this.cachedGet<{ categories: string[] }>('/submissions/categories', LONG_LIVED_CACHE_TTL_MS);
         return res.categories;
     }
 
-    async getLastWeekGoals(): Promise<{ goals: WorkEntry[]; from_week: string }> {
-        return this.request<{ goals: WorkEntry[]; from_week: string }>('/submissions/last-week-goals');
+    async getLastWeekGoals(weekId?: string, projectId?: string): Promise<{ goals: WorkEntry[]; from_week: string }> {
+        const queryParams = new URLSearchParams();
+        if (weekId) queryParams.append('week_id', weekId);
+        if (projectId) queryParams.append('project_id', projectId);
+        return this.cachedGet<{ goals: WorkEntry[]; from_week: string }>(`/submissions/last-week-goals${queryParams.toString() ? `?${queryParams.toString()}` : ''}`, DEFAULT_GET_CACHE_TTL_MS);
     }
 
     async getHoursTrend(weeks = 8): Promise<HoursTrendPoint[]> {
-        const res = await this.request<{ trend: HoursTrendPoint[] }>(`/submissions/hours-trend?weeks=${weeks}`);
+        const res = await this.cachedGet<{ trend: HoursTrendPoint[] }>(`/submissions/hours-trend?weeks=${weeks}`, DEFAULT_GET_CACHE_TTL_MS);
         return res.trend;
     }
 
     async getAttendance(weeks = 12): Promise<AttendanceData> {
-        return this.request<AttendanceData>(`/submissions/attendance?weeks=${weeks}`);
+        return this.cachedGet<AttendanceData>(`/submissions/attendance?weeks=${weeks}`, DEFAULT_GET_CACHE_TTL_MS);
     }
 
     async getMySubmissions(): Promise<SubmissionSummary[]> {
-        return this.request<SubmissionSummary[]>('/submissions/my');
+        return this.cachedGet<SubmissionSummary[]>('/submissions/my', DEFAULT_GET_CACHE_TTL_MS);
     }
 
     async getSubmission(submissionId: string): Promise<Submission> {
-        return this.request<Submission>(`/submissions/${submissionId}`);
+        return this.cachedGet<Submission>(`/submissions/${submissionId}`, DEFAULT_GET_CACHE_TTL_MS);
+    }
+
+    async getProjectSubmissions(projectId: string): Promise<SubmissionSummary[]> {
+        return this.cachedGet<SubmissionSummary[]>(`/projects/${projectId}/submissions`, DEFAULT_GET_CACHE_TTL_MS);
+    }
+
+    async getProjectSubmission(projectId: string, submissionId: string): Promise<Submission> {
+        return this.cachedGet<Submission>(`/projects/${projectId}/submissions/${submissionId}`, DEFAULT_GET_CACHE_TTL_MS);
     }
 
     async getAllSubmissions(params?: Record<string, string | number | boolean | undefined>): Promise<SubmissionSummary[]> {
@@ -582,10 +735,12 @@ export class ApiClient {
                 if (value !== undefined) queryParams.append(key, String(value));
             });
         }
-        return this.request<SubmissionSummary[]>(`/submissions?${queryParams}`);
+        return this.cachedGet<SubmissionSummary[]>(`/submissions?${queryParams}`, DEFAULT_GET_CACHE_TTL_MS);
     }
 
     async createOrUpdateSubmission(data: {
+        project_id: string;
+        week_id?: string;
         past_work: WorkEntry[];
         present_work: WorkEntry[];
         future_work: WorkEntry[];
@@ -593,28 +748,39 @@ export class ApiClient {
         notes?: string;
         mood_rating?: number;
     }): Promise<Submission> {
-        return this.request<Submission>('/submissions', {
+        const response = await this.request<Submission>('/submissions', {
             method: 'POST',
             body: JSON.stringify(data),
         });
+        this.invalidateCacheByPrefix('/submissions', '/users/me', '/submissions/selectable-weeks', `/projects/${data.project_id}/submissions`);
+        return response;
     }
 
     async submitSubmission(submissionId: string): Promise<Submission> {
-        return this.request<Submission>(`/submissions/${submissionId}/submit`, {
+        const response = await this.request<Submission>(`/submissions/${submissionId}/submit`, {
             method: 'POST',
         });
+        this.invalidateCacheByPrefix('/submissions', '/users/me', '/submissions/selectable-weeks');
+        return response;
     }
 
     async reviewSubmission(submissionId: string, adminNotes?: string): Promise<Submission> {
-        return this.request<Submission>(`/submissions/${submissionId}/review`, {
+        const response = await this.request<Submission>(`/submissions/${submissionId}/review`, {
             method: 'POST',
             body: JSON.stringify({ admin_notes: adminNotes }),
         });
+        this.invalidateCacheByPrefix('/submissions');
+        return response;
+    }
+
+    async deleteSubmission(submissionId: string): Promise<void> {
+        await this.request<void>(`/submissions/${submissionId}`, { method: 'DELETE' });
+        this.invalidateCacheByPrefix('/submissions', '/users/me');
     }
 
     async getSubmissionStats(weekId?: string) {
         const queryParams = weekId ? `?week_id=${weekId}` : '';
-        return this.request<{
+        return this.cachedGet<{
             week_id: string;
             this_week: {
                 total_drafts: number;
@@ -623,27 +789,29 @@ export class ApiClient {
                 blockers_count: number;
             };
             all_time: { total_submissions: number };
-        }>(`/submissions/stats/overview${queryParams}`);
+        }>(`/submissions/stats/overview${queryParams}`, DEFAULT_GET_CACHE_TTL_MS);
     }
 
     // Comments
     async getComments(submissionId: string): Promise<Comment[]> {
-        return this.request<Comment[]>(`/comments/submission/${submissionId}`);
+        return this.cachedGet<Comment[]>(`/comments/submission/${submissionId}`, SHORT_LIVED_CACHE_TTL_MS);
     }
 
     async createComment(submissionId: string, content: string, parentId?: string): Promise<Comment> {
-        return this.request<Comment>(`/comments/submission/${submissionId}`, {
+        const response = await this.request<Comment>(`/comments/submission/${submissionId}`, {
             method: 'POST',
             body: JSON.stringify({ content, parent_id: parentId }),
         });
+        this.invalidateCacheByPrefix(`/comments/submission/${submissionId}`);
+        return response;
     }
 
     // Files / Google Drive
     async getDriveStatus(): Promise<{ configured: boolean; message: string; storage_type: 'shared_drive' | 's3' | 'local'; folder_name?: string }> {
-        return this.request<{ configured: boolean; message: string; storage_type: 'shared_drive' | 's3' | 'local'; folder_name?: string }>('/files/drive-status');
+        return this.cachedGet<{ configured: boolean; message: string; storage_type: 'shared_drive' | 's3' | 'local'; folder_name?: string }>('/files/drive-status', LONG_LIVED_CACHE_TTL_MS);
     }
 
-    async uploadFile(file: File, weekId?: string): Promise<UploadedFile> {
+    async uploadFile(file: File, context?: FileUploadContext): Promise<UploadedFile> {
         const token = this.getToken();
         const status = await this.getDriveStatus();
 
@@ -658,7 +826,11 @@ export class ApiClient {
                     filename: file.name,
                     content_type: file.type || 'application/octet-stream',
                     size: file.size,
-                    week_id: weekId,
+                    week_id: context?.week_id,
+                    project_id: context?.project_id,
+                    submission_id: context?.submission_id,
+                    work_item_id: context?.work_item_id,
+                    source_type: context?.source_type,
                 }),
             });
 
@@ -678,14 +850,40 @@ export class ApiClient {
                 throw new Error('Direct upload to S3 failed');
             }
 
-            return uploadPlan;
+            const finalized = await this.request<UploadedFile>('/files/upload-complete', {
+                method: 'POST',
+                body: JSON.stringify({
+                    file_id: uploadPlan.file_id,
+                    filename: uploadPlan.filename,
+                    mime_type: uploadPlan.mime_type,
+                    uploaded_at: uploadPlan.uploaded_at,
+                    storage_type: uploadPlan.storage_type,
+                    size: file.size,
+                    week_id: context?.week_id,
+                    project_id: context?.project_id,
+                    submission_id: context?.submission_id,
+                    work_item_id: context?.work_item_id,
+                    source_type: context?.source_type,
+                }),
+            });
+
+            this.invalidateCacheByPrefix('/files');
+            if (context?.project_id) {
+                this.invalidateCacheByPrefix(`/projects/${context.project_id}/files`);
+            }
+            if (context?.submission_id) {
+                this.invalidateCacheByPrefix(`/submissions/${context.submission_id}/files`);
+            }
+            return finalized;
         }
 
         const formData = new FormData();
         formData.append('file', file);
-        if (weekId) {
-            formData.append('week_id', weekId);
-        }
+        if (context?.week_id) formData.append('week_id', context.week_id);
+        if (context?.project_id) formData.append('project_id', context.project_id);
+        if (context?.submission_id) formData.append('submission_id', context.submission_id);
+        if (context?.work_item_id) formData.append('work_item_id', context.work_item_id);
+        if (context?.source_type) formData.append('source_type', context.source_type);
 
         const response = await fetch(`${API_URL}/files/upload`, {
             method: 'POST',
@@ -700,20 +898,28 @@ export class ApiClient {
             throw new Error(error.detail || 'Upload failed');
         }
 
-        return response.json();
+        const result = await response.json();
+        this.invalidateCacheByPrefix('/files');
+        if (context?.project_id) {
+            this.invalidateCacheByPrefix(`/projects/${context.project_id}/files`);
+        }
+        if (context?.submission_id) {
+            this.invalidateCacheByPrefix(`/submissions/${context.submission_id}/files`);
+        }
+        return result;
     }
 
-    async uploadMultipleFiles(files: File[], weekId?: string): Promise<UploadedFile[]> {
+    async uploadMultipleFiles(files: File[], context?: FileUploadContext): Promise<UploadedFile[]> {
         const uploads: UploadedFile[] = [];
         for (const file of files) {
-            uploads.push(await this.uploadFile(file, weekId));
+            uploads.push(await this.uploadFile(file, context));
         }
         return uploads;
     }
 
     async getFolderLink(weekId?: string): Promise<{ folder_link: string | null; week_id?: string }> {
         const queryParams = weekId ? `?week_id=${weekId}` : '';
-        return this.request<{ folder_link: string | null; week_id?: string }>(`/files/folder-link${queryParams}`);
+        return this.cachedGet<{ folder_link: string | null; week_id?: string }>(`/files/folder-link${queryParams}`, SHORT_LIVED_CACHE_TTL_MS);
     }
 
     async uploadProjectImage(file: File): Promise<{ url: string; filename: string }> {
@@ -747,7 +953,15 @@ export class ApiClient {
         if (params?.week_id) queryParams.append('week_id', params.week_id);
         if (params?.volunteer_name) queryParams.append('volunteer_name', params.volunteer_name);
         const qs = queryParams.toString();
-        return this.request<FileInfo[]>(`/files/list${qs ? `?${qs}` : ''}`);
+        return this.cachedGet<FileInfo[]>(`/files/list${qs ? `?${qs}` : ''}`, SHORT_LIVED_CACHE_TTL_MS);
+    }
+
+    async listSubmissionFiles(submissionId: string): Promise<UploadedFile[]> {
+        return this.cachedGet<UploadedFile[]>(`/submissions/${submissionId}/files`, SHORT_LIVED_CACHE_TTL_MS);
+    }
+
+    async listProjectFiles(projectId: string): Promise<UploadedFile[]> {
+        return this.cachedGet<UploadedFile[]>(`/projects/${projectId}/files`, SHORT_LIVED_CACHE_TTL_MS);
     }
 
     // File download (returns blob URL for browser download)
@@ -769,98 +983,124 @@ export class ApiClient {
 
     // File deletion
     async deleteFile(fileId: string): Promise<{ success: boolean; message: string }> {
-        return this.request<{ success: boolean; message: string }>(`/files/${fileId}`, {
+        const response = await this.request<{ success: boolean; message: string }>(`/files/${fileId}`, {
             method: 'DELETE',
         });
+        this.invalidateCacheByPrefix('/files');
+        return response;
     }
 
     // Notifications
     async getEmailStatus(): Promise<{ configured: boolean; message: string }> {
-        return this.request<{ configured: boolean; message: string }>('/notifications/email-status');
+        return this.cachedGet<{ configured: boolean; message: string }>('/notifications/email-status', LONG_LIVED_CACHE_TTL_MS);
     }
 
     async sendReminders(weekId?: string): Promise<ReminderResult> {
         const qs = weekId ? `?week_id=${weekId}` : '';
-        return this.request<ReminderResult>(`/notifications/send-reminders${qs}`, {
+        const response = await this.request<ReminderResult>(`/notifications/send-reminders${qs}`, {
             method: 'POST',
         });
+        this.invalidateCacheByPrefix('/notifications', '/submissions');
+        return response;
     }
 
     // Projects
     async getProjects(status?: string): Promise<Project[]> {
         const qs = status ? `?status=${status}` : '';
-        return this.request<Project[]>(`/projects${qs}`);
+        return this.cachedGet<Project[]>(`/projects${qs}`, DEFAULT_GET_CACHE_TTL_MS);
     }
 
     async getProject(projectId: string): Promise<Project> {
-        return this.request<Project>(`/projects/${projectId}`);
+        return this.cachedGet<Project>(`/projects/${projectId}`, DEFAULT_GET_CACHE_TTL_MS);
     }
 
     async createProject(data: ProjectCreate): Promise<Project> {
-        return this.request<Project>('/projects', {
+        const response = await this.request<Project>('/projects', {
             method: 'POST',
             body: JSON.stringify(data),
         });
+        this.invalidateCacheByPrefix('/projects');
+        return response;
     }
 
     async updateProject(projectId: string, data: Partial<ProjectCreate>): Promise<Project> {
-        return this.request<Project>(`/projects/${projectId}`, {
+        const response = await this.request<Project>(`/projects/${projectId}`, {
             method: 'PATCH',
             body: JSON.stringify(data),
         });
+        this.invalidateCacheByPrefix('/projects');
+        return response;
     }
 
     async addProjectMember(projectId: string, userId: string): Promise<Project> {
-        return this.request<Project>(`/projects/${projectId}/members/${userId}`, {
+        const response = await this.request<Project>(`/projects/${projectId}/members/${userId}`, {
             method: 'POST',
         });
+        this.invalidateCacheByPrefix('/projects');
+        return response;
     }
 
     async removeProjectMember(projectId: string, userId: string): Promise<Project> {
-        return this.request<Project>(`/projects/${projectId}/members/${userId}`, {
+        const response = await this.request<Project>(`/projects/${projectId}/members/${userId}`, {
             method: 'DELETE',
         });
+        this.invalidateCacheByPrefix('/projects');
+        return response;
     }
 
     async deleteProject(projectId: string): Promise<void> {
-        return this.request<void>(`/projects/${projectId}`, {
+        const response = await this.request<void>(`/projects/${projectId}`, {
             method: 'DELETE',
         });
+        this.invalidateCacheByPrefix('/projects');
+        return response;
     }
 
     async getProjectWorkItems(projectId: string): Promise<ProjectWorkItem[]> {
-        return this.request<ProjectWorkItem[]>(`/projects/${projectId}/work-items`);
+        return this.cachedGet<ProjectWorkItem[]>(`/projects/${projectId}/work-items`, DEFAULT_GET_CACHE_TTL_MS);
+    }
+
+    async getMyAssignedWorkItems(projectId: string): Promise<ProjectWorkItem[]> {
+        return this.cachedGet<ProjectWorkItem[]>(`/projects/${projectId}/work-items/my-assigned`, DEFAULT_GET_CACHE_TTL_MS);
     }
 
     async createProjectWorkItem(projectId: string, data: ProjectWorkItemCreate): Promise<ProjectWorkItem> {
-        return this.request<ProjectWorkItem>(`/projects/${projectId}/work-items`, {
+        const response = await this.request<ProjectWorkItem>(`/projects/${projectId}/work-items`, {
             method: 'POST',
             body: JSON.stringify(data),
         });
+        this.invalidateCacheByPrefix('/projects');
+        return response;
     }
 
     async updateProjectWorkItem(projectId: string, workItemId: string, data: Partial<ProjectWorkItemCreate>): Promise<ProjectWorkItem> {
-        return this.request<ProjectWorkItem>(`/projects/${projectId}/work-items/${workItemId}`, {
+        const response = await this.request<ProjectWorkItem>(`/projects/${projectId}/work-items/${workItemId}`, {
             method: 'PATCH',
             body: JSON.stringify(data),
         });
+        this.invalidateCacheByPrefix('/projects');
+        return response;
     }
 
     async deleteProjectWorkItem(projectId: string, workItemId: string): Promise<void> {
-        return this.request<void>(`/projects/${projectId}/work-items/${workItemId}`, {
+        const response = await this.request<void>(`/projects/${projectId}/work-items/${workItemId}`, {
             method: 'DELETE',
         });
+        this.invalidateCacheByPrefix('/projects');
+        return response;
     }
 
     async getProjectJoinRequests(projectId: string): Promise<ProjectJoinRequest[]> {
-        return this.request<ProjectJoinRequest[]>(`/projects/${projectId}/join-requests`);
+        return this.cachedGet<ProjectJoinRequest[]>(`/projects/${projectId}/join-requests`, DEFAULT_GET_CACHE_TTL_MS);
     }
 
     async requestProjectAccess(projectId: string, data: ProjectJoinRequestCreate): Promise<ProjectJoinRequest> {
-        return this.request<ProjectJoinRequest>(`/projects/${projectId}/join-requests`, {
+        const response = await this.request<ProjectJoinRequest>(`/projects/${projectId}/join-requests`, {
             method: 'POST',
             body: JSON.stringify(data),
         });
+        this.invalidateCacheByPrefix('/projects');
+        return response;
     }
 
     async reviewProjectJoinRequest(
@@ -868,15 +1108,17 @@ export class ApiClient {
         joinRequestId: string,
         status: 'approved' | 'declined'
     ): Promise<ProjectJoinRequest> {
-        return this.request<ProjectJoinRequest>(`/projects/${projectId}/join-requests/${joinRequestId}`, {
+        const response = await this.request<ProjectJoinRequest>(`/projects/${projectId}/join-requests/${joinRequestId}`, {
             method: 'PATCH',
             body: JSON.stringify({ status }),
         });
+        this.invalidateCacheByPrefix('/projects');
+        return response;
     }
 
     // Settings
     async getSettings(): Promise<AdminSettings> {
-        const data = await this.request<AdminSettings>('/settings');
+        const data = await this.cachedGet<AdminSettings>('/settings', LONG_LIVED_CACHE_TTL_MS);
         return normalizeAdminSettings(data);
     }
 
@@ -885,6 +1127,7 @@ export class ApiClient {
             method: 'PUT',
             body: JSON.stringify(data),
         });
+        this.invalidateCacheByPrefix('/settings', '/submissions/current-week', '/submissions/selectable-weeks');
         return {
             ...response,
             settings: normalizeAdminSettings(response.settings),
@@ -893,20 +1136,24 @@ export class ApiClient {
 
     // Delegated admin access
     async getAdminAccessGrants(): Promise<AdminAccessGrant[]> {
-        return this.request<AdminAccessGrant[]>('/admin-access/grants');
+        return this.cachedGet<AdminAccessGrant[]>('/admin-access/grants', DEFAULT_GET_CACHE_TTL_MS);
     }
 
     async createAdminAccessGrant(data: AdminAccessGrantCreate): Promise<AdminAccessGrant> {
-        return this.request<AdminAccessGrant>('/admin-access/grants', {
+        const response = await this.request<AdminAccessGrant>('/admin-access/grants', {
             method: 'POST',
             body: JSON.stringify(data),
         });
+        this.invalidateCacheByPrefix('/admin-access', '/users');
+        return response;
     }
 
     async revokeAdminAccessGrant(grantId: string): Promise<void> {
-        return this.request<void>(`/admin-access/grants/${grantId}`, {
+        const response = await this.request<void>(`/admin-access/grants/${grantId}`, {
             method: 'DELETE',
         });
+        this.invalidateCacheByPrefix('/admin-access', '/users');
+        return response;
     }
 
     async getAuditLogs(params?: {
@@ -927,7 +1174,7 @@ export class ApiClient {
         if (params?.action) queryParams.append('action', params.action);
         if (params?.is_delegated !== undefined) queryParams.append('is_delegated', String(params.is_delegated));
         const qs = queryParams.toString();
-        return this.request<AuditLogEntry[]>(`/admin-access/audit-logs${qs ? `?${qs}` : ''}`);
+        return this.cachedGet<AuditLogEntry[]>(`/admin-access/audit-logs${qs ? `?${qs}` : ''}`, SHORT_LIVED_CACHE_TTL_MS);
     }
 
 }

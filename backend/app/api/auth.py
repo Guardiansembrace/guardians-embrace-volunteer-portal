@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 from app.core.admin_access import build_user_response
 from app.core.audit import write_audit_log
 from app.core.config import get_settings
+from app.core.email_identity import find_document_by_email, normalize_email
 from app.core.rate_limit import rate_limit_by_ip
 from app.core.security import create_access_token, verify_google_token, get_current_user
 from app.core.time import utc_now
@@ -55,7 +56,7 @@ async def login_with_google(request: GoogleLoginRequest, http_request: Request):
         google_user = await verify_google_token(request.access_token)
         logger.info("Google user info retrieved: %s", google_user.get('email', 'unknown'))
         
-        email = google_user.get("email")
+        email = normalize_email(google_user.get("email"))
         google_id = google_user.get("sub")
         name = google_user.get("name", email.split("@")[0] if email else "User")
         picture = google_user.get("picture")
@@ -68,10 +69,10 @@ async def login_with_google(request: GoogleLoginRequest, http_request: Request):
         
         settings = get_settings()
         is_bootstrap_admin = settings.is_admin(email)
-        allowed_email_entry = await AllowedEmail.find_one(AllowedEmail.email == email)
+        allowed_email_entry = await find_document_by_email(AllowedEmail, email)
         
         # Check if user exists
-        user = await User.find_one(User.email == email)
+        user = await find_document_by_email(User, email)
         was_invited_only = bool(user and user.invited_only)
         
         if user is None:
@@ -128,6 +129,7 @@ async def login_with_google(request: GoogleLoginRequest, http_request: Request):
                 )
 
             # Update existing user
+            user.email = email
             user.last_login = utc_now()
             user.name = name
             user.picture = picture  # Update profile picture in case it changed

@@ -50,19 +50,6 @@ export default function SetNamePage() {
         }
     };
 
-    // Calculate remaining time from file_access_expires
-    let timeRemaining = '';
-    if (user?.file_access_expires) {
-        const expires = new Date(user.file_access_expires);
-        const now = new Date();
-        const diffMs = expires.getTime() - now.getTime();
-        if (diffMs > 0) {
-            const days = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-            const hours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-            timeRemaining = days > 0 ? `${days}d ${hours}h` : `${hours}h`;
-        }
-    }
-
     return (
         <div style={{
             minHeight: '100vh',
@@ -100,23 +87,10 @@ export default function SetNamePage() {
                 <p style={{
                     color: 'var(--color-text-secondary)',
                     fontSize: '0.95rem',
-                    marginBottom: '0.25rem',
+                    marginBottom: '1.5rem',
                 }}>
                     Please enter your full name to get started.
                 </p>
-
-                {timeRemaining && (
-                    <p style={{
-                        color: 'var(--color-accent)',
-                        fontSize: '0.85rem',
-                        marginBottom: '1.5rem',
-                        fontWeight: 500,
-                    }}>
-                        ⏳ File access window: {timeRemaining} remaining
-                    </p>
-                )}
-
-                {!timeRemaining && <div style={{ marginBottom: '1.5rem' }} />}
 
                 {/* Form */}
                 <form onSubmit={handleSubmit}>

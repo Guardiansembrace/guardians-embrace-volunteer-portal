@@ -75,6 +75,11 @@ def can_view_project(_project: Project, _user: User) -> bool:
     return True
 
 
+def can_view_project_submission(project: Project, user: User, *, operations_override: bool = False) -> bool:
+    """Project members can view project-scoped submissions."""
+    return can_contribute_to_project(project, user, operations_override=operations_override)
+
+
 def can_manage_project_work(project: Project, user: User, *, operations_override: bool = False) -> bool:
     """Project leads and operations users can manage work across the board."""
     return operations_override or has_operations_access(user) or is_project_lead(project, user)

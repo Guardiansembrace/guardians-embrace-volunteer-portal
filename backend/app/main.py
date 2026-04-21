@@ -4,10 +4,17 @@ FastAPI application entry point.
 """
 
 from contextlib import asynccontextmanager
+import asyncio
 import logging
 import os
 import sys
 import uuid
+
+# Motor (the async MongoDB driver) is incompatible with the Windows ProactorEventLoop
+# introduced as default in Python 3.8+ / 3.13. Force the SelectorEventLoop on Windows
+# so that Motor's socket operations work correctly during startup.
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -60,8 +67,11 @@ from app.api import (
     auth_router,
     users_router,
     submissions_router,
+    project_submissions_router,
     comments_router,
     files_router,
+    project_files_router,
+    submission_files_router,
     notifications_router,
     projects_router,
     project_work_items_router,
@@ -191,8 +201,11 @@ def create_app() -> FastAPI:
     app.include_router(invites_router, prefix=api_prefix)
     app.include_router(users_router, prefix=api_prefix)
     app.include_router(submissions_router, prefix=api_prefix)
+    app.include_router(project_submissions_router, prefix=api_prefix)
     app.include_router(comments_router, prefix=api_prefix)
     app.include_router(files_router, prefix=api_prefix)
+    app.include_router(project_files_router, prefix=api_prefix)
+    app.include_router(submission_files_router, prefix=api_prefix)
     app.include_router(notifications_router, prefix=api_prefix)
     app.include_router(projects_router, prefix=api_prefix)
     app.include_router(project_work_items_router, prefix=api_prefix)

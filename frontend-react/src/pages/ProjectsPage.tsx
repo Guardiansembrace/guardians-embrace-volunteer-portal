@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import type { Project, ProjectUserSummary, User, ProjectCreate } from '../lib/api';
 import { Navbar, Footer } from '../components/Layout';
-import { Button, LoadingSpinner, EmptyState, Input, Textarea } from '../components/ui';
+import { Button, EmptyState, GuidancePanel, Input, LoadingSpinner, Textarea } from '../components/ui';
 import { Logo } from '../components/Logo';
 import { useAuth } from '../lib/useAuth';
 import { Search, Mail, Plus, Users, X, Filter, Edit2, Trash2, Upload, Image as ImageIcon } from 'lucide-react';
 import {
+    buildProjectTeamMembers,
     type RoleTagValue,
     formatTagLabel,
     getNonRoleTags,
@@ -24,11 +25,14 @@ const ROLE_TAG_OPTIONS: Array<{ value: RoleTagValue; label: string; description:
 
 export default function ProjectsPage() {
     const navigate = useNavigate();
-    const { canManageOperations } = useAuth();
+    const location = useLocation();
+    const { user, canManageOperations } = useAuth();
+    const canCreateProjects = Boolean(user);
     const [projects, setProjects] = useState<Project[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [filterStatus, setFilterStatus] = useState<string>('all');
     const [searchQuery, setSearchQuery] = useState('');
+    const [successMessage, setSuccessMessage] = useState('');
 
     // Create/Edit Modal State
     const [showCreateModal, setShowCreateModal] = useState(false);
@@ -39,6 +43,16 @@ export default function ProjectsPage() {
 
     const [users, setUsers] = useState<User[]>([]);
     const assignableUsers = users.filter((user) => user.is_active);
+
+    useEffect(() => {
+        const state = location.state as { successMessage?: string } | null;
+        if (!state?.successMessage) {
+            return;
+        }
+
+        setSuccessMessage(state.successMessage);
+        navigate(location.pathname + location.search, { replace: true, state: null });
+    }, [location.pathname, location.search, location.state, navigate]);
 
     useEffect(() => {
         const loadData = async () => {
@@ -94,12 +108,17 @@ export default function ProjectsPage() {
         e.preventDefault();
         setIsSaving(true);
         try {
-            const payload = {
+            const payload: Partial<ProjectCreate> = {
                 ...projectForm,
                 tags: normalizeProjectTags(projectForm.tags),
                 // Ensure empty strings are undefined for optional fields
                 lead_id: projectForm.lead_id || undefined
             };
+
+            if (!canManageOperations) {
+                delete payload.lead_id;
+                delete payload.member_ids;
+            }
 
             if (editingProject) {
                 await api.updateProject(editingProject.id, payload as Partial<ProjectCreate>);
@@ -186,13 +205,66 @@ export default function ProjectsPage() {
                             <h1 style={{ fontSize: '2.5rem', fontWeight: 800, margin: '0 0 0.5rem 0', color: 'var(--color-text-primary)' }}>Our Projects</h1>
                             <p style={{ color: 'var(--color-text-muted)', margin: 0, fontSize: '1.1rem' }}>Explore the initiatives our team is working on to make a difference.</p>
                         </div>
-                        {canManageOperations && (
+                        {canCreateProjects && (
                             <Button onClick={openCreateModal}>
                                 <Plus size={18} style={{ marginRight: '0.5rem' }} />
                                 New Project
                             </Button>
                         )}
                     </div>
+
+                    <GuidancePanel
+                        title="How To Use Project Boards"
+                        description="This page helps volunteers find the right place to contribute before they open an individual board."
+                        items={[
+                            'Use search and status filters first when you know the type of project or stage you want to help with.',
+                            'Open a board to request access, see work items, and understand who is already on the team.',
+                            'Create a new project only when the work needs its own board, members, and request flow instead of fitting inside an existing project.',
+                            'Tags help people scan which audiences, roles, or themes a project is meant for.',
+                        ]}
+                        icon={<Users size={18} />}
+                        tone="slate"
+                        style={{ marginBottom: '1.5rem' }}
+                    />
+
+                    {successMessage && (
+                        <div
+                            role="status"
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: '1rem',
+                                marginBottom: '1.5rem',
+                                padding: '0.9rem 1rem',
+                                borderRadius: '0.9rem',
+                                background: '#f0fdf4',
+                                border: '1px solid #bbf7d0',
+                                color: '#166534',
+                                boxShadow: '0 6px 18px rgba(34, 197, 94, 0.08)',
+                            }}
+                        >
+                            <span style={{ fontWeight: 700, fontSize: '0.95rem' }}>{successMessage}</span>
+                            <button
+                                type="button"
+                                onClick={() => setSuccessMessage('')}
+                                aria-label="Dismiss success message"
+                                style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    border: 'none',
+                                    background: 'transparent',
+                                    color: '#15803d',
+                                    cursor: 'pointer',
+                                    padding: '0.15rem',
+                                    borderRadius: '999px',
+                                }}
+                            >
+                                <X size={18} />
+                            </button>
+                        </div>
+                    )}
 
                     {/* Filters */}
                     <div className="card" style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginBottom: '2rem', padding: '1rem', flexWrap: 'wrap' }}>
@@ -206,19 +278,20 @@ export default function ProjectsPage() {
                                 onChange={(e) => setSearchQuery(e.target.value)}
                             />
                         </div>
-                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <div className="filter-scroll-container" style={{ display: 'flex', gap: '0.5rem', flexWrap: 'nowrap', overflowX: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: '0.25rem', width: '100%' }}>
                             {['all', 'active', 'completed', 'on_hold', 'planned'].map(status => (
                                 <button
                                     key={status}
                                     onClick={() => setFilterStatus(status)}
                                     style={{
-                                        padding: '0.5rem 1rem',
+                                        padding: '0.4rem 0.85rem',
                                         borderRadius: '999px',
-                                        fontSize: '0.85rem',
+                                        fontSize: '0.8rem',
                                         fontWeight: 600,
                                         border: 'none',
                                         cursor: 'pointer',
                                         transition: 'all 0.2s',
+                                        whiteSpace: 'nowrap',
                                         backgroundColor: filterStatus === status ? 'var(--color-dark-bg)' : 'transparent',
                                         color: filterStatus === status ? 'var(--color-primary-gold)' : 'var(--color-text-secondary)',
                                         boxShadow: filterStatus === status ? 'var(--shadow-sm)' : 'none',
@@ -231,7 +304,7 @@ export default function ProjectsPage() {
                     </div>
 
                     {isLoading ? (
-                        <div className="flex justify-center py-20">
+                        <div className="flex justify-center py-20" style={{ display: 'flex', justifyContent: 'center', padding: '5rem 0' }}>
                             <LoadingSpinner size={40} />
                         </div>
                     ) : filteredProjects.length > 0 ? (
@@ -421,76 +494,84 @@ export default function ProjectsPage() {
                                     </div>
                                 )}
 
-                                {/* Project Lead */}
-                                <div>
-                                    <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, color: '#374151', marginBottom: '0.25rem' }}>Project Lead</label>
-                                    <select
-                                        style={{
-                                            width: '100%',
-                                            padding: '0.5rem 0.75rem',
-                                            border: '1px solid #d1d5db',
-                                            borderRadius: '0.375rem',
-                                            outline: 'none'
-                                        }}
-                                        value={projectForm.lead_id || ''}
-                                        onChange={(e) => setProjectForm({ ...projectForm, lead_id: e.target.value || undefined })}
-                                    >
-                                        <option value="">Select a lead...</option>
-                                        {assignableUsers.map(user => (
-                                            <option key={user.id} value={user.id}>
-                                                {user.name} ({formatTagLabel(user.role || 'volunteer')}{user.invited_only ? ' - Pending login' : ''})
-                                            </option>
-                                        ))}
-                                    </select>
-                                    <p style={{ fontSize: '0.75rem', color: '#6b7280', margin: '0.35rem 0 0' }}>
-                                        Invited teammates appear here right away and are marked until they complete their first login.
-                                    </p>
-                                </div>
+                                {canManageOperations ? (
+                                    <>
+                                        {/* Project Lead */}
+                                        <div>
+                                            <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, color: '#374151', marginBottom: '0.25rem' }}>Project Lead</label>
+                                            <select
+                                                style={{
+                                                    width: '100%',
+                                                    padding: '0.5rem 0.75rem',
+                                                    border: '1px solid #d1d5db',
+                                                    borderRadius: '0.375rem',
+                                                    outline: 'none'
+                                                }}
+                                                value={projectForm.lead_id || ''}
+                                                onChange={(e) => setProjectForm({ ...projectForm, lead_id: e.target.value || undefined })}
+                                            >
+                                                <option value="">Select a lead...</option>
+                                                {assignableUsers.map(user => (
+                                                    <option key={user.id} value={user.id}>
+                                                        {user.name} ({formatTagLabel(user.role || 'volunteer')}{user.invited_only ? ' - Pending login' : ''})
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <p style={{ fontSize: '0.75rem', color: '#6b7280', margin: '0.35rem 0 0' }}>
+                                                Invited teammates appear here right away and are marked until they complete their first login.
+                                            </p>
+                                        </div>
 
-                                {/* Team Members */}
-                                <div>
-                                    <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, color: '#374151', marginBottom: '0.25rem' }}>Team Members</label>
-                                    <div style={{
-                                        maxHeight: '150px',
-                                        overflowY: 'auto',
-                                        border: '1px solid #d1d5db',
-                                        borderRadius: '0.375rem',
-                                        padding: '0.5rem',
-                                        backgroundColor: '#f9fafb'
-                                    }}>
-                                        {assignableUsers.length > 0 ? assignableUsers.map(user => (
-                                            <div key={user.id} style={{ display: 'flex', alignItems: 'center', marginBottom: '0.5rem' }}>
-                                                <input
-                                                    type="checkbox"
-                                                    id={`member-${user.id}`}
-                                                    checked={(projectForm.member_ids || []).includes(user.id)}
-                                                    onChange={(e) => {
-                                                        const currentMembers = projectForm.member_ids || [];
-                                                        const newMembers = e.target.checked
-                                                            ? [...currentMembers, user.id]
-                                                            : currentMembers.filter(id => id !== user.id);
-                                                        setProjectForm({ ...projectForm, member_ids: newMembers });
-                                                    }}
-                                                    style={{ marginRight: '0.5rem', width: '16px', height: '16px' }}
-                                                />
-                                                <label htmlFor={`member-${user.id}`} style={{ fontSize: '0.875rem', cursor: 'pointer' }}>
-                                                    {user.name}{' '}
-                                                    <span style={{ color: '#8b1538', fontSize: '0.75rem', fontWeight: 600 }}>
-                                                        {formatTagLabel(user.role || 'volunteer')}
-                                                    </span>{' '}
-                                                    {user.invited_only && (
-                                                        <span style={{ color: '#b45309', fontSize: '0.75rem', fontWeight: 600 }}>
-                                                            Pending login
-                                                        </span>
-                                                    )}{' '}
-                                                    <span style={{ color: '#6b7280', fontSize: '0.75rem' }}>({user.email})</span>
-                                                </label>
+                                        {/* Team Members */}
+                                        <div>
+                                            <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, color: '#374151', marginBottom: '0.25rem' }}>Team Members</label>
+                                            <div style={{
+                                                maxHeight: '150px',
+                                                overflowY: 'auto',
+                                                border: '1px solid #d1d5db',
+                                                borderRadius: '0.375rem',
+                                                padding: '0.5rem',
+                                                backgroundColor: '#f9fafb'
+                                            }}>
+                                                {assignableUsers.length > 0 ? assignableUsers.map(user => (
+                                                    <div key={user.id} style={{ display: 'flex', alignItems: 'center', marginBottom: '0.5rem' }}>
+                                                        <input
+                                                            type="checkbox"
+                                                            id={`member-${user.id}`}
+                                                            checked={(projectForm.member_ids || []).includes(user.id)}
+                                                            onChange={(e) => {
+                                                                const currentMembers = projectForm.member_ids || [];
+                                                                const newMembers = e.target.checked
+                                                                    ? [...currentMembers, user.id]
+                                                                    : currentMembers.filter(id => id !== user.id);
+                                                                setProjectForm({ ...projectForm, member_ids: newMembers });
+                                                            }}
+                                                            style={{ marginRight: '0.5rem', width: '16px', height: '16px' }}
+                                                        />
+                                                        <label htmlFor={`member-${user.id}`} style={{ fontSize: '0.875rem', cursor: 'pointer' }}>
+                                                            {user.name}{' '}
+                                                            <span style={{ color: '#8b1538', fontSize: '0.75rem', fontWeight: 600 }}>
+                                                                {formatTagLabel(user.role || 'volunteer')}
+                                                            </span>{' '}
+                                                            {user.invited_only && (
+                                                                <span style={{ color: '#b45309', fontSize: '0.75rem', fontWeight: 600 }}>
+                                                                    Pending login
+                                                                </span>
+                                                            )}{' '}
+                                                            <span style={{ color: '#6b7280', fontSize: '0.75rem' }}>({user.email})</span>
+                                                        </label>
+                                                    </div>
+                                                )) : (
+                                                    <div style={{ color: '#6b7280', fontSize: '0.875rem', fontStyle: 'italic' }}>No users found</div>
+                                                )}
                                             </div>
-                                        )) : (
-                                            <div style={{ color: '#6b7280', fontSize: '0.875rem', fontStyle: 'italic' }}>No users found</div>
-                                        )}
+                                        </div>
+                                    </>
+                                ) : (
+                                    <div style={{ padding: '0.9rem 1rem', borderRadius: '0.75rem', backgroundColor: '#f8fafc', border: '1px solid #cbd5e1', color: '#475569', fontSize: '0.9rem', lineHeight: 1.5 }}>
+                                        You’ll be added as the project lead automatically when this project is created. Teammates can request access from the project board, and you can review those requests there.
                                     </div>
-                                </div>
+                                )}
 
 
                                 <Textarea
@@ -523,8 +604,23 @@ interface ProjectCardProps {
     onDelete: () => void;
 }
 
+function getProjectUserDisplayName(user: ProjectUserSummary) {
+    if (user.invited_only) return user.email;
+    return user.name || user.email;
+}
+
+function getProjectUserInitials(user: ProjectUserSummary) {
+    return getProjectUserDisplayName(user)
+        .split(/[\s@._-]+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((part) => part.charAt(0).toUpperCase())
+        .join('') || 'U';
+}
+
 function ProjectCard({ project, isAdmin, onOpen, onEdit, onDelete }: ProjectCardProps) {
     const projectTags = normalizeProjectTags(project.tags);
+    const teamMembers = buildProjectTeamMembers(project);
 
     return (
         <div
@@ -592,18 +688,21 @@ function ProjectCard({ project, isAdmin, onOpen, onEdit, onDelete }: ProjectCard
 
                 <div className="project-footer" style={{ marginTop: 'auto', paddingTop: '1rem', borderTop: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <div className="avatar-stack">
-                        {project.members.length > 0 ? (
-                            project.members.slice(0, 5).map((member) => (
+                        {teamMembers.length > 0 ? (
+                            teamMembers.slice(0, 5).map((member) => (
                                 <div key={member.id} className="avatar-stack-item">
-                                    <UserAvatar user={member} />
+                                    <UserAvatar user={member} isLead={project.lead?.id === member.id} />
                                 </div>
                             ))
                         ) : (
-                            <span style={{ fontSize: '0.8rem', color: '#94a3b8', fontStyle: 'italic' }}>No members</span>
+                            <span style={{ fontSize: '0.8rem', color: '#94a3b8', fontStyle: 'italic' }}>No team assigned</span>
                         )}
-                        {project.members.length > 5 && (
-                            <div className="avatar-more">
-                                +{project.members.length - 5}
+                        {teamMembers.length > 5 && (
+                            <div
+                                className="avatar-more"
+                                title={teamMembers.slice(5).map(getProjectUserDisplayName).join(', ')}
+                            >
+                                +{teamMembers.length - 5}
                             </div>
                         )}
                     </div>
@@ -688,20 +787,20 @@ function StatusBadge({ status }: { status: string }) {
     );
 }
 
-function UserAvatar({ user }: { user: ProjectUserSummary }) {
+function UserAvatar({ user, isLead = false }: { user: ProjectUserSummary; isLead?: boolean }) {
     const [showTooltip, setShowTooltip] = useState(false);
     const [imageFailed, setImageFailed] = useState(false);
-    const initials = user.name
-        .split(' ')
-        .filter(Boolean)
-        .slice(0, 2)
-        .map((part) => part.charAt(0).toUpperCase())
-        .join('') || 'U';
+    const displayName = getProjectUserDisplayName(user);
+    const initials = getProjectUserInitials(user);
     const shouldShowImage = Boolean(user.picture) && !imageFailed;
+    const membershipLabel = isLead ? 'Project Lead' : 'Project Member';
+    const accountRoleLabel = formatTagLabel(user.role || 'volunteer');
 
     return (
         <div
             style={{ position: 'relative', width: '2rem', height: '2rem' }}
+            title={`${membershipLabel}: ${displayName}`}
+            aria-label={`${membershipLabel}: ${displayName}`}
             onMouseEnter={() => setShowTooltip(true)}
             onMouseLeave={() => setShowTooltip(false)}
         >
@@ -709,6 +808,7 @@ function UserAvatar({ user }: { user: ProjectUserSummary }) {
                 <img
                     src={user.picture}
                     alt=""
+                    referrerPolicy="no-referrer"
                     onError={() => setImageFailed(true)}
                     style={{
                         display: 'block',
@@ -761,6 +861,7 @@ function UserAvatar({ user }: { user: ProjectUserSummary }) {
                                 <img
                                     src={user.picture}
                                     alt=""
+                                    referrerPolicy="no-referrer"
                                     onError={() => setImageFailed(true)}
                                     style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
                                 />
@@ -771,8 +872,11 @@ function UserAvatar({ user }: { user: ProjectUserSummary }) {
                             )}
                         </div>
                         <div>
-                            <h4 style={{ fontWeight: 700, color: '#111827' }}>{user.name}</h4>
-                            <p style={{ fontSize: '0.75rem', color: '#6b7280', textTransform: 'capitalize' }}>{user.role?.replace('_', ' ') || 'Volunteer'}</p>
+                            <h4 style={{ fontWeight: 700, color: '#111827' }}>{displayName}</h4>
+                            <p style={{ fontSize: '0.75rem', color: '#6b7280' }}>
+                                {membershipLabel}
+                                {accountRoleLabel ? ` - ${accountRoleLabel} account` : ''}
+                            </p>
                         </div>
                     </div>
 
@@ -785,6 +889,11 @@ function UserAvatar({ user }: { user: ProjectUserSummary }) {
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.875rem', color: '#4b5563' }}>
                                 <Users size={14} />
                                 <span>{user.team}</span>
+                            </div>
+                        )}
+                        {user.invited_only && (
+                            <div style={{ fontSize: '0.8rem', color: '#b45309', fontWeight: 600 }}>
+                                Pending login
                             </div>
                         )}
 

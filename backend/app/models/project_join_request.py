@@ -16,13 +16,22 @@ class ProjectJoinRequestStatus(str, Enum):
     DECLINED = "declined"
 
 
+class ProjectJoinRequestType(str, Enum):
+    """Kind of project request being submitted."""
+
+    ACCESS = "access"
+    LEAD = "lead"
+    DELETE = "delete"
+
+
 class ProjectJoinRequest(Document):
-    """A request from a user to join a project's working team."""
+    """A request from a user to join or lead a project."""
 
     project_id: PydanticObjectId
     user_id: PydanticObjectId
     user_email: EmailStr
     user_name: str
+    request_type: ProjectJoinRequestType = ProjectJoinRequestType.ACCESS
     message: Optional[str] = None
     status: ProjectJoinRequestStatus = ProjectJoinRequestStatus.PENDING
     requested_at: datetime = Field(default_factory=utc_now)
@@ -41,6 +50,7 @@ class ProjectJoinRequest(Document):
                 "user_id": "65f0c10e8eced6afed0a8a22",
                 "user_email": "volunteer@example.com",
                 "user_name": "Volunteer Builder",
+                "request_type": "access",
                 "message": "I would like to help with content updates.",
                 "status": "pending",
             }
@@ -51,6 +61,7 @@ class ProjectJoinRequest(Document):
 class ProjectJoinRequestCreate(BaseModel):
     """Schema for creating a join request."""
 
+    request_type: ProjectJoinRequestType = ProjectJoinRequestType.ACCESS
     message: Optional[str] = Field(default=None, max_length=600)
 
     @field_validator("message", mode="before")
@@ -83,6 +94,7 @@ class ProjectJoinRequestResponse(BaseModel):
     user_id: str
     user_email: EmailStr
     user_name: str
+    request_type: ProjectJoinRequestType
     message: Optional[str] = None
     status: ProjectJoinRequestStatus
     requested_at: datetime

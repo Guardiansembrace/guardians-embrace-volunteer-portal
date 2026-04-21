@@ -10,7 +10,7 @@ import {
     getAuditOutcomeLabel,
 } from '../lib/auditTrail';
 import { Navbar, Footer } from '../components/Layout';
-import { Button, LoadingSpinner } from '../components/ui';
+import { Button, GuidancePanel, LoadingSpinner } from '../components/ui';
 import {
     ArrowRight,
     BellRing,
@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 
 interface AdminStats {
+    week_id?: string;
     users?: {
         total: number;
         active: number;
@@ -41,6 +42,29 @@ interface AdminStats {
     projects: {
         active: number;
     };
+}
+
+type SubmissionQueueView = 'needs-review' | 'blockers' | 'drafts' | 'reviewed' | 'all';
+
+function buildAdminSubmissionsHref(filters: {
+    view?: SubmissionQueueView;
+    week?: string;
+    status?: 'draft' | 'submitted' | 'reviewed';
+}) {
+    const queryParams = new URLSearchParams();
+
+    if (filters.view) {
+        queryParams.set('view', filters.view);
+    }
+    if (filters.week) {
+        queryParams.set('week', filters.week);
+    }
+    if (filters.status) {
+        queryParams.set('status', filters.status);
+    }
+
+    const queryString = queryParams.toString();
+    return queryString ? `/admin/submissions?${queryString}` : '/admin/submissions';
 }
 
 export default function AdminDashboardPage() {
@@ -72,6 +96,10 @@ export default function AdminDashboardPage() {
     const canViewAuditLogs = hasAdminScope('view_audit_logs');
     const canViewAdminAccess = hasAdminScope('view_admin_access') || hasAdminScope('manage_admin_access');
     const canManageAdminAccess = hasAdminScope('manage_admin_access');
+    const currentAdminWeek = stats?.week_id;
+    const blockersReportedHref = buildAdminSubmissionsHref({ view: 'blockers', week: currentAdminWeek });
+    const draftsOpenHref = buildAdminSubmissionsHref({ view: 'drafts', week: currentAdminWeek, status: 'draft' });
+    const submittedThisWeekHref = buildAdminSubmissionsHref({ view: 'all', week: currentAdminWeek, status: 'submitted' });
 
     useEffect(() => {
         if (!authLoading && (!isAuthenticated || !canAccessAdminPortal)) {
@@ -93,6 +121,7 @@ export default function AdminDashboardPage() {
             const [userStats, subStats, projects, emailStatus, recentAuditLogs] = requests;
 
             setStats({
+                week_id: subStats?.week_id,
                 users: userStats ? {
                     total: userStats.total_users,
                     active: userStats.active_users,
@@ -186,6 +215,19 @@ export default function AdminDashboardPage() {
                         </div>
                     </div>
 
+                    <GuidancePanel
+                        title="How To Work Through Admin Tasks"
+                        description="This workspace is meant to keep the highest-priority operations visible without making every admin page feel crowded."
+                        items={[
+                            'Check blockers first, then pending reviews, then open drafts. That order usually removes the most friction for volunteers.',
+                            'The portal only shows workspaces and actions you currently have permission to use.',
+                            'Use project, user, and settings areas separately so each task stays easier to scan and safer to manage.',
+                        ]}
+                        icon={<Shield size={18} />}
+                        tone="slate"
+                        style={{ marginBottom: '1.5rem' }}
+                    />
+
                     {reminderResult && (
                         <div style={{ 
                             padding: '1rem 1.25rem', 
@@ -216,17 +258,21 @@ export default function AdminDashboardPage() {
                                     <>
                                         <AdminMetric
                                             title="Blockers Reported"
-                                            value={stats.submissions.blockers}
-                                            icon={<AlertCircle size={22} />}
-                                            tone={stats.submissions.blockers > 0 ? 'danger' : 'success'}
-                                            subtext="Need your attention now"
-                                        />
+                                        value={stats.submissions.blockers}
+                                        icon={<AlertCircle size={22} />}
+                                        tone={stats.submissions.blockers > 0 ? 'danger' : 'success'}
+                                        subtext="Need your attention now"
+                                        href={blockersReportedHref}
+                                        actionLabel="Open blockers queue"
+                                    />
                                         <AdminMetric
                                             title="Drafts Open"
                                             value={stats.submissions.drafts_open}
                                             icon={<FileText size={22} />}
                                             tone={stats.submissions.drafts_open > 0 ? 'warning' : 'default'}
                                             subtext="Pending submission"
+                                            href={draftsOpenHref}
+                                            actionLabel="Review open drafts"
                                         />
                                         <AdminMetric
                                             title="Submitted this Week"
@@ -234,6 +280,8 @@ export default function AdminDashboardPage() {
                                             icon={<Activity size={22} />}
                                             tone="default"
                                             subtext={`${stats.submissions.this_week_hours.toFixed(1)} hours logged`}
+                                            href={submittedThisWeekHref}
+                                            actionLabel="Open this week's queue"
                                         />
                                     </>
                                 )}
@@ -244,6 +292,8 @@ export default function AdminDashboardPage() {
                                         icon={<Users size={22} />}
                                         tone={stats.users.inactive > 0 ? 'warning' : 'default'}
                                         subtext={`Out of ${stats.users.total} total`}
+                                        href="/admin/users"
+                                        actionLabel="Open user directory"
                                     />
                                 )}
                                 <AdminMetric
@@ -252,6 +302,8 @@ export default function AdminDashboardPage() {
                                     icon={<Briefcase size={22} />}
                                     tone="default"
                                     subtext="Boards currently open"
+                                    href="/projects"
+                                    actionLabel="Open project boards"
                                 />
                             </div>
 
@@ -390,7 +442,23 @@ export default function AdminDashboardPage() {
 
 // ── Shared Metric Components ────────────────────────────────────────────────────────
 
-function AdminMetric({ title, value, icon, tone, subtext }: { title: string, value: number, icon: React.ReactNode, tone: 'default' | 'warning' | 'danger' | 'success', subtext: string }) {
+function AdminMetric({
+    title,
+    value,
+    icon,
+    tone,
+    subtext,
+    href,
+    actionLabel,
+}: {
+    title: string,
+    value: number,
+    icon: React.ReactNode,
+    tone: 'default' | 'warning' | 'danger' | 'success',
+    subtext: string,
+    href?: string,
+    actionLabel?: string,
+}) {
     const toneStyles = {
         default: { bg: 'white', border: '#e2e8f0', color: '#0f172a', iconBg: '#f1f5f9', iconColor: '#64748b' },
         warning: { bg: '#fffbeb', border: '#fde68a', color: '#b45309', iconBg: '#fef3c7', iconColor: '#d97706' },
@@ -399,8 +467,7 @@ function AdminMetric({ title, value, icon, tone, subtext }: { title: string, val
     };
 
     const style = toneStyles[tone];
-
-    return (
+    const card = (
         <div style={{
             background: style.bg,
             border: `1px solid ${style.border}`,
@@ -410,9 +477,21 @@ function AdminMetric({ title, value, icon, tone, subtext }: { title: string, val
             flexDirection: 'column',
             justifyContent: 'space-between',
             boxShadow: '0 4px 20px rgba(0, 0, 0, 0.03)',
-            transition: 'transform 0.2s ease, box-shadow 0.2s ease',
+            transition: 'transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease',
             position: 'relative',
-            overflow: 'hidden'
+            overflow: 'hidden',
+            height: '100%',
+            cursor: href ? 'pointer' : 'default',
+        }}
+        onMouseOver={(event) => {
+            if (!href) return;
+            event.currentTarget.style.transform = 'translateY(-3px)';
+            event.currentTarget.style.boxShadow = '0 12px 30px rgba(15, 23, 42, 0.08)';
+        }}
+        onMouseOut={(event) => {
+            if (!href) return;
+            event.currentTarget.style.transform = 'translateY(0)';
+            event.currentTarget.style.boxShadow = '0 4px 20px rgba(0, 0, 0, 0.03)';
         }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
                 <p style={{ margin: 0, fontSize: '0.8rem', fontWeight: 700, color: tone === 'default' ? '#475569' : style.iconColor, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
@@ -430,7 +509,27 @@ function AdminMetric({ title, value, icon, tone, subtext }: { title: string, val
                     {subtext}
                 </p>
             </div>
+            {actionLabel && (
+                <div style={{ marginTop: '1.1rem', paddingTop: '0.9rem', borderTop: '1px solid rgba(148, 163, 184, 0.2)', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.82rem', fontWeight: 700, color: tone === 'default' ? 'var(--color-primary-gold-dark)' : style.color }}>
+                    {actionLabel}
+                    <ArrowRight size={14} />
+                </div>
+            )}
         </div>
+    );
+
+    if (!href) {
+        return card;
+    }
+
+    return (
+        <Link
+            to={href}
+            style={{ textDecoration: 'none', display: 'block', height: '100%' }}
+            aria-label={`${title}: ${value}. ${actionLabel ?? 'Open details'}`}
+        >
+            {card}
+        </Link>
     );
 }
 

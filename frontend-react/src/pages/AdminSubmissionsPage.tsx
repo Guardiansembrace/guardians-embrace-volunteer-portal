@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { format, parseISO } from 'date-fns';
 import {
     AlertCircle,
@@ -13,7 +13,7 @@ import {
     ListFilter
 } from 'lucide-react';
 import { Navbar, Footer } from '../components/Layout';
-import { Badge, Button, EmptyState, LoadingSpinner } from '../components/ui';
+import { Badge, Button, EmptyState, GuidancePanel, LoadingSpinner } from '../components/ui';
 import { api } from '../lib/api';
 import { openPortalAwareLink } from '../lib/fileLinks';
 import type { Submission, SubmissionSummary } from '../lib/api';
@@ -21,8 +21,28 @@ import { useAuth } from '../lib/useAuth';
 
 type QueueView = 'needs-review' | 'blockers' | 'drafts' | 'reviewed' | 'all';
 
+function normalizeQueueView(value: string | null | undefined): QueueView | null {
+    if (value === 'needs-review' || value === 'blockers' || value === 'drafts' || value === 'reviewed' || value === 'all') {
+        return value;
+    }
+    return null;
+}
+
+function getSavedQueueView(): QueueView {
+    if (typeof window === 'undefined') {
+        return 'needs-review';
+    }
+
+    return normalizeQueueView(window.localStorage.getItem('admin-submissions-view')) ?? 'needs-review';
+}
+
 export default function AdminSubmissionsPage() {
     const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
+    const routeView = normalizeQueueView(searchParams.get('view'));
+    const routeWeek = searchParams.get('week') ?? '';
+    const routeStatus = searchParams.get('status') ?? '';
+    const routeVolunteerSearch = searchParams.get('q') ?? '';
     const { canAccessAdminPortal, hasAdminScope, isDelegatedAdmin, isLoading: authLoading, isAuthenticated } = useAuth();
     const volunteerSearchId = useId();
     const weekFilterId = useId();
@@ -32,19 +52,10 @@ export default function AdminSubmissionsPage() {
     const [submissions, setSubmissions] = useState<SubmissionSummary[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [loadError, setLoadError] = useState<string | null>(null);
-    const [weekFilter, setWeekFilter] = useState('');
-    const [statusFilter, setStatusFilter] = useState('');
-    const [volunteerSearch, setVolunteerSearch] = useState('');
-    const [activeView, setActiveView] = useState<QueueView>(() => {
-        if (typeof window === 'undefined') {
-            return 'needs-review';
-        }
-        const savedView = window.localStorage.getItem('admin-submissions-view');
-        if (savedView === 'needs-review' || savedView === 'blockers' || savedView === 'drafts' || savedView === 'reviewed' || savedView === 'all') {
-            return savedView;
-        }
-        return 'needs-review';
-    });
+    const [weekFilter, setWeekFilter] = useState(() => routeWeek);
+    const [statusFilter, setStatusFilter] = useState(() => routeStatus);
+    const [volunteerSearch, setVolunteerSearch] = useState(() => routeVolunteerSearch);
+    const [activeView, setActiveView] = useState<QueueView>(() => routeView ?? getSavedQueueView());
     const [viewingSubmission, setViewingSubmission] = useState<Submission | null>(null);
     const [loadingDetail, setLoadingDetail] = useState(false);
     const [reviewing, setReviewing] = useState(false);
@@ -66,6 +77,21 @@ export default function AdminSubmissionsPage() {
     useEffect(() => {
         window.localStorage.setItem('admin-submissions-view', activeView);
     }, [activeView]);
+
+    useEffect(() => {
+        const nextView = routeView ?? getSavedQueueView();
+        const nextWeek = routeWeek;
+        const nextStatus = routeStatus;
+        const nextVolunteerSearch = routeVolunteerSearch;
+
+        setActiveView((current) => current === nextView ? current : nextView);
+        setWeekFilter((current) => current === nextWeek ? current : nextWeek);
+        setStatusFilter((current) => current === nextStatus ? current : nextStatus);
+        setVolunteerSearch((current) => current === nextVolunteerSearch ? current : nextVolunteerSearch);
+        if (nextWeek || nextStatus || nextVolunteerSearch) {
+            setShowFilters(true);
+        }
+    }, [routeStatus, routeView, routeVolunteerSearch, routeWeek]);
 
     const loadSubmissions = async () => {
         try {
@@ -223,6 +249,20 @@ export default function AdminSubmissionsPage() {
                                 : 'Manage the complete queue of volunteer updates and track organizational health.'}
                         </p>
                     </div>
+
+                    <GuidancePanel
+                        title="Review Flow"
+                        description="A few shared rules keep the review queue easier to triage and more consistent for volunteers."
+                        items={[
+                            'Needs Review is the main queue for submitted updates that are ready for action.',
+                            'Blockers should usually be checked first because someone is waiting on help, access, or a decision.',
+                            'Drafts can still change, so treat them as in-progress context rather than final records.',
+                            'Leave review notes before marking a submission reviewed whenever the volunteer may need feedback or follow-up.',
+                        ]}
+                        icon={<FileText size={18} />}
+                        tone="slate"
+                        style={{ marginBottom: '1.5rem' }}
+                    />
 
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.5rem', marginBottom: '3rem' }}>
                         <AdminMetric

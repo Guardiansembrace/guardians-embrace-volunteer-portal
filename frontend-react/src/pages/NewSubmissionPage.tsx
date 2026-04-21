@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate, useParams, Link } from 'react-router-dom';
+import { useNavigate, useParams, Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../lib/useAuth';
 import { api } from '../lib/api';
 import { openPortalAwareLink } from '../lib/fileLinks';
-import type { WeekInfo, WorkEntry, Submission, FileInfo, AdminSettings, FormSection } from '../lib/api';
+import type { WeekInfo, WorkEntry, Submission, AdminSettings, FormSection, SelectableSubmissionWeek, Project, ProjectWorkItem } from '../lib/api';
 import FileUpload from '../components/FileUpload';
 import CommentSection from '../components/CommentSection';
 
 import { Navbar, Footer } from '../components/Layout';
-import { Card, CardHeader, CardTitle, Button, Input, Textarea, LoadingSpinner } from '../components/ui';
-import { ArrowLeft, Plus, Trash2, Save, Send, Link as LinkIcon, Clock, CheckCircle, Edit3, Download, FileText, ExternalLink, Tag, Zap } from 'lucide-react';
+import { Card, CardHeader, CardTitle, Button, GuidancePanel, Input, Textarea, LoadingSpinner } from '../components/ui';
+import { ArrowLeft, Plus, Trash2, Save, Send, Link as LinkIcon, Clock, CheckCircle, Edit3, ExternalLink, Tag, Zap } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 
 interface FormEntry {
@@ -18,6 +18,8 @@ interface FormEntry {
     hours: number;
     drive_link: string;
     tags: string[];
+    work_item_id?: string;
+    work_item_status_update?: 'pending' | 'active' | 'blocked' | 'finished';
 }
 
 interface SubmissionAutosaveSnapshot {
@@ -40,6 +42,7 @@ type EntrySetter = React.Dispatch<React.SetStateAction<FormEntry[]>>;
 
 const AUTOSAVE_VERSION = 1;
 const AUTOSAVE_DELAY_MS = 1200;
+const MAX_WEEKLY_HOURS = 168;
 
 const createEntry = (): FormEntry => ({
     id: Math.random().toString(36).substr(2, 9),
@@ -55,14 +58,45 @@ const workEntryToFormEntry = (entry: WorkEntry): FormEntry => ({
     hours: entry.hours || 0,
     drive_link: entry.drive_link || '',
     tags: entry.tags || [],
+    work_item_id: entry.work_item_id,
+    work_item_status_update: entry.work_item_status_update,
 });
+
+const parseHoursInput = (value: string): number => {
+    const parsed = Number.parseFloat(value);
+    if (!Number.isFinite(parsed)) {
+        return 0;
+    }
+    return Math.min(MAX_WEEKLY_HOURS, Math.max(0, parsed));
+};
+
+const getEntryHoursValidationMessage = (sectionLabel: string, entries: FormEntry[]): string | null => {
+    for (const [index, entry] of entries.entries()) {
+        const hours = entry.hours || 0;
+        if (!Number.isFinite(hours)) {
+            return `${sectionLabel} entry ${index + 1} hours must be a valid number.`;
+        }
+        if (hours < 0) {
+            return `${sectionLabel} entry ${index + 1} hours cannot be negative.`;
+        }
+        if (hours > MAX_WEEKLY_HOURS) {
+            return `${sectionLabel} entry ${index + 1} hours cannot exceed ${MAX_WEEKLY_HOURS}.`;
+        }
+    }
+    return null;
+};
 
 export default function NewSubmissionPage() {
     const navigate = useNavigate();
     const { id: submissionId } = useParams<{ id: string }>();
+    const [searchParams] = useSearchParams();
     const { user, isAuthenticated, isLoading: authLoading } = useAuth();
+    const requestedWeekId = searchParams.get('week')?.trim() || undefined;
 
     const [weekInfo, setWeekInfo] = useState<WeekInfo | null>(null);
+    const [selectableWeeks, setSelectableWeeks] = useState<SelectableSubmissionWeek[]>([]);
+    const [projects, setProjects] = useState<Project[]>([]);
+    const [selectedProjectId, setSelectedProjectId] = useState('');
     const [submission, setSubmission] = useState<Submission | null>(null);
     const [pastWork, setPastWork] = useState<FormEntry[]>([createEntry()]);
     const [presentWork, setPresentWork] = useState<FormEntry[]>([createEntry()]);
@@ -74,9 +108,10 @@ export default function NewSubmissionPage() {
     const [quickSummary, setQuickSummary] = useState('');
     const [quickHours, setQuickHours] = useState(0);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [saveSuccess, setSaveSuccess] = useState(false);
-    const [isLoading, setIsLoading] = useState(!!submissionId);
+    const [isLoading, setIsLoading] = useState(true);
 
     // Dynamic Form Capabilities
     const [settings, setSettings] = useState<AdminSettings | null>(null);
@@ -91,34 +126,43 @@ export default function NewSubmissionPage() {
     const [lastWeekGoals, setLastWeekGoals] = useState<{ goals: WorkEntry[]; from_week: string } | null>(null);
     const [goalsApplied, setGoalsApplied] = useState(false);
 
-    // Files from Drive
-    const [driveFiles, setDriveFiles] = useState<FileInfo[]>([]);
-    const [filesLoading, setFilesLoading] = useState(false);
-    const [fileAccessNotice, setFileAccessNotice] = useState<string | null>(null);
     const [pendingRecovery, setPendingRecovery] = useState<SubmissionAutosaveSnapshot | null>(null);
     const [recoveryChecked, setRecoveryChecked] = useState(false);
+
+    // Assigned work items for the selected project (used to suggest entries)
+    const [assignedWorkItems, setAssignedWorkItems] = useState<ProjectWorkItem[]>([]);
     const [lastAutosavedAt, setLastAutosavedAt] = useState<number | null>(null);
     const [persistedSnapshot, setPersistedSnapshot] = useState<string | null>(null);
 
     const autosaveScope = submissionId
         ? `submission:${submissionId}`
         : weekInfo?.week_id
-            ? `week:${weekInfo.week_id}`
+            ? `week:${weekInfo.week_id}:project:${selectedProjectId || 'unassigned'}`
             : null;
     const autosaveKey = user && autosaveScope
         ? `submission-autosave:${user.id}:${autosaveScope}`
         : null;
 
-    // Check if within edit window (7 days from account creation)
-    const canEdit = (() => {
-        if (!user) return false;
-        if (user.role === 'admin' || user.role === 'team_lead') return true;
-        if (!user.file_access_expires) return true; // no expiry set = unlimited
-        return new Date(user.file_access_expires) > new Date();
-    })();
+    // Legacy file-access expiry no longer blocks volunteers from editing or attaching files.
+    const canEdit = Boolean(user);
 
     // Check if submission is editable (draft or submitted within window)
     const canEditSubmission = canEdit && (!submission || submission.status !== 'reviewed');
+    const selectedProject = projects.find((project) => project.id === selectedProjectId) || null;
+
+    // Fetch assigned work items whenever the project changes (edit mode only)
+    useEffect(() => {
+        if (!selectedProjectId || !isEditing) {
+            setAssignedWorkItems([]);
+            return;
+        }
+        let cancelled = false;
+        api.getMyAssignedWorkItems(selectedProjectId)
+            .then(items => { if (!cancelled) setAssignedWorkItems(items); })
+            .catch(() => { if (!cancelled) setAssignedWorkItems([]); });
+        return () => { cancelled = true; };
+    }, [selectedProjectId, isEditing]);
+
     const targetWeekId = submission?.week_id || weekInfo?.week_id || '';
     const isCurrentWeekContext = Boolean(weekInfo?.week_id && targetWeekId === weekInfo.week_id);
     const submissionWindowStart = isCurrentWeekContext && weekInfo
@@ -154,97 +198,182 @@ export default function NewSubmissionPage() {
     const isSubmissionWindowLocked = isBeforeSubmissionWindow || isClosedAfterDeadline;
     const canPersistSubmission = canEditSubmission && !isSubmissionWindowLocked;
 
+    const resetFormState = useCallback(() => {
+        setSubmission(null);
+        setPastWork([createEntry()]);
+        setPresentWork([createEntry()]);
+        setFutureWork([createEntry()]);
+        setBlockers('');
+        setNotes('');
+        setMoodRating(null);
+        setQuickMode(false);
+        setQuickSummary('');
+        setQuickHours(0);
+        setCustomResponses({});
+        setLastWeekGoals(null);
+        setGoalsApplied(false);
+        setPendingRecovery(null);
+        setRecoveryChecked(false);
+        setLastAutosavedAt(null);
+        setPersistedSnapshot(null);
+    }, []);
+
+    const applySubmissionState = useCallback((sub: Submission) => {
+        const restoredPastWork = sub.past_work.length > 0 ? sub.past_work.map(workEntryToFormEntry) : [createEntry()];
+        const restoredPresentWork = sub.present_work.length > 0 ? sub.present_work.map(workEntryToFormEntry) : [createEntry()];
+        const restoredFutureWork = sub.future_work.length > 0 ? sub.future_work.map(workEntryToFormEntry) : [createEntry()];
+        const restoredCustomResponses = Object.fromEntries(
+            Object.entries(sub.custom_responses || {}).map(([key, value]) => [
+                key,
+                Array.isArray(value) ? (value as WorkEntry[]).map(workEntryToFormEntry) : [],
+            ]),
+        );
+
+        setSubmission(sub);
+        setSelectedProjectId(sub.project_id);
+        setPastWork(restoredPastWork);
+        setPresentWork(restoredPresentWork);
+        setFutureWork(restoredFutureWork);
+        setBlockers(sub.blockers || '');
+        setNotes(sub.notes || '');
+        setMoodRating(sub.mood_rating ?? null);
+        setQuickMode(false);
+        setQuickSummary('');
+        setQuickHours(0);
+        setCustomResponses(restoredCustomResponses);
+
+        const persistedServerSnapshot: SubmissionAutosaveSnapshot = {
+            version: AUTOSAVE_VERSION,
+            savedAt: 0,
+            pastWork: restoredPastWork,
+            presentWork: restoredPresentWork,
+            futureWork: restoredFutureWork,
+            blockers: sub.blockers || '',
+            notes: sub.notes || '',
+            moodRating: sub.mood_rating ?? null,
+            quickMode: false,
+            quickSummary: '',
+            quickHours: 0,
+            customResponses: restoredCustomResponses,
+            goalsApplied: false,
+        };
+        setPersistedSnapshot(JSON.stringify(persistedServerSnapshot));
+    }, []);
+
     useEffect(() => {
         if (!authLoading && !isAuthenticated) {
             navigate('/login');
         }
     }, [authLoading, isAuthenticated, navigate]);
 
-    // Load week info, settings, and last week goals
+    // Load settings shared by every submission view.
     useEffect(() => {
-        if (isAuthenticated) {
-            api.getCurrentWeekInfo().then(setWeekInfo).catch(console.error);
-            api.getSettings().then(s => {
-                setSettings(s);
-                setCategories(s.tags);
-            }).catch(console.error);
-            // Only fetch carry-forward goals for new submissions
-            if (!submissionId) {
-                api.getLastWeekGoals().then(setLastWeekGoals).catch(console.error);
-            }
+        if (!isAuthenticated) {
+            return;
         }
-    }, [isAuthenticated, submissionId]);
 
-    // Load existing submission if viewing
+        api.getSettings().then((settingsData) => {
+            setSettings(settingsData);
+            setCategories(settingsData.tags);
+        }).catch(console.error);
+    }, [isAuthenticated]);
+
     useEffect(() => {
-        if (isAuthenticated && submissionId) {
+        if (!isAuthenticated || !user) {
+            return;
+        }
+
+        api.getProjects()
+            .then((allProjects) => {
+                const contributorProjects = allProjects.filter((project) => (
+                    user.role === 'admin'
+                    || user.role === 'team_lead'
+                    || project.lead?.id === user.id
+                    || project.members.some((member) => member.id === user.id)
+                ));
+                setProjects(contributorProjects);
+
+                if (!submissionId && contributorProjects.length === 1) {
+                    setSelectedProjectId(contributorProjects[0].id);
+                }
+            })
+            .catch(console.error);
+    }, [isAuthenticated, submissionId, user]);
+
+    // Load the active submission context for either a selected week or an existing submission.
+    useEffect(() => {
+        if (!isAuthenticated) {
+            return;
+        }
+
+        let cancelled = false;
+
+        const loadSubmissionContext = async () => {
             setIsLoading(true);
-            api.getSubmission(submissionId)
-                .then((sub) => {
-                    const restoredPastWork = sub.past_work.length > 0 ? sub.past_work.map(workEntryToFormEntry) : [createEntry()];
-                    const restoredPresentWork = sub.present_work.length > 0 ? sub.present_work.map(workEntryToFormEntry) : [createEntry()];
-                    const restoredFutureWork = sub.future_work.length > 0 ? sub.future_work.map(workEntryToFormEntry) : [createEntry()];
-                    const restoredCustomResponses = Object.fromEntries(
-                        Object.entries(sub.custom_responses || {}).map(([k, v]) => [
-                            k,
-                            Array.isArray(v) ? (v as WorkEntry[]).map(workEntryToFormEntry) : []
-                        ])
-                    );
+            setError(null);
+            setSaveSuccess(false);
+            setSelectableWeeks([]);
+            setWeekInfo(null);
+            setIsEditing(!submissionId);
+            resetFormState();
 
-                    setSubmission(sub);
-                    setPastWork(restoredPastWork);
-                    setPresentWork(restoredPresentWork);
-                    setFutureWork(restoredFutureWork);
-                    setBlockers(sub.blockers || '');
-                    setNotes(sub.notes || '');
-                    setMoodRating(sub.mood_rating ?? null);
-                    setCustomResponses(restoredCustomResponses);
-                    const persistedServerSnapshot: SubmissionAutosaveSnapshot = {
-                        version: AUTOSAVE_VERSION,
-                        savedAt: 0,
-                        pastWork: restoredPastWork,
-                        presentWork: restoredPresentWork,
-                        futureWork: restoredFutureWork,
-                        blockers: sub.blockers || '',
-                        notes: sub.notes || '',
-                        moodRating: sub.mood_rating ?? null,
-                        quickMode: false,
-                        quickSummary: '',
-                        quickHours: 0,
-                        customResponses: restoredCustomResponses,
-                        goalsApplied: false,
-                    };
-                    setPersistedSnapshot(JSON.stringify(persistedServerSnapshot));
-                })
-                .catch((err) => setError(err.message))
-                .finally(() => setIsLoading(false));
-        }
-    }, [isAuthenticated, submissionId]);
+            try {
+                if (submissionId) {
+                    const sub = await api.getSubmission(submissionId);
+                    if (cancelled) {
+                        return;
+                    }
 
-    // Load files from Drive for the current week
-    useEffect(() => {
-        if (isAuthenticated && (weekInfo || submission)) {
-            if (!canEdit) {
-                setDriveFiles([]);
-                setFilesLoading(false);
-                setFileAccessNotice('Your file access window has expired. Contact an admin if you need to upload, download, or manage files for this submission.');
-                return;
+                    applySubmissionState(sub);
+
+                    const [info, weeks] = await Promise.all([
+                        api.getCurrentWeekInfo(sub.week_id, sub.project_id),
+                        api.getSelectableSubmissionWeeks(sub.week_id, sub.project_id),
+                    ]);
+
+                    if (cancelled) {
+                        return;
+                    }
+
+                    setWeekInfo(info);
+                    setSelectableWeeks(weeks);
+                } else {
+                    const [info, weeks, goals] = await Promise.all([
+                        api.getCurrentWeekInfo(requestedWeekId, selectedProjectId || undefined),
+                        api.getSelectableSubmissionWeeks(requestedWeekId, selectedProjectId || undefined),
+                        api.getLastWeekGoals(requestedWeekId, selectedProjectId || undefined),
+                    ]);
+
+                    if (cancelled) {
+                        return;
+                    }
+
+                    setWeekInfo(info);
+                    setSelectableWeeks(weeks);
+                    setLastWeekGoals(goals);
+
+                    if (selectedProjectId && info.has_submission && info.submission_id) {
+                        navigate(`/submissions/${info.submission_id}`, { replace: true });
+                        return;
+                    }
+                }
+            } catch (err) {
+                if (!cancelled) {
+                    setError(err instanceof Error ? err.message : 'Failed to load this submission week.');
+                }
+            } finally {
+                if (!cancelled) {
+                    setIsLoading(false);
+                }
             }
+        };
 
-            const targetWeek = submission?.week_id || weekInfo?.week_id;
-            if (targetWeek) {
-                setFilesLoading(true);
-                setFileAccessNotice(null);
-                api.listFiles({ week_id: targetWeek })
-                    .then(setDriveFiles)
-                    .catch(() => {
-                        setDriveFiles([]);
-                        setFileAccessNotice('Files could not be loaded right now.');
-                    })
-                    .finally(() => setFilesLoading(false));
-            }
-        }
-    }, [canEdit, isAuthenticated, weekInfo, submission]);
+        void loadSubmissionContext();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [applySubmissionState, isAuthenticated, navigate, requestedWeekId, resetFormState, selectedProjectId, submissionId]);
 
     useEffect(() => {
         setPendingRecovery(null);
@@ -254,7 +383,7 @@ export default function NewSubmissionPage() {
     }, [autosaveKey]);
 
     useEffect(() => {
-        if (!autosaveKey || isLoading || !isEditing || !canPersistSubmission || recoveryChecked) {
+        if (!autosaveKey || isLoading || !isEditing || !canEditSubmission || recoveryChecked) {
             return;
         }
 
@@ -279,7 +408,7 @@ export default function NewSubmissionPage() {
         } finally {
             setRecoveryChecked(true);
         }
-    }, [autosaveKey, canPersistSubmission, isEditing, isLoading, recoveryChecked]);
+    }, [autosaveKey, canEditSubmission, isEditing, isLoading, recoveryChecked]);
 
     const buildAutosaveSnapshot = useCallback((savedAt = Date.now()): SubmissionAutosaveSnapshot => ({
         version: AUTOSAVE_VERSION,
@@ -310,7 +439,7 @@ export default function NewSubmissionPage() {
     ]);
 
     useEffect(() => {
-        if (!autosaveKey || !recoveryChecked || pendingRecovery || !isEditing || !canPersistSubmission) {
+        if (!autosaveKey || !recoveryChecked || pendingRecovery || !isEditing || !canEditSubmission) {
             return;
         }
 
@@ -339,7 +468,7 @@ export default function NewSubmissionPage() {
         autosaveKey,
         blockers,
         buildAutosaveSnapshot,
-        canPersistSubmission,
+        canEditSubmission,
         customResponses,
         futureWork,
         goalsApplied,
@@ -362,13 +491,38 @@ export default function NewSubmissionPage() {
         return past + present;
     };
 
+    const draftTotalHours = quickMode ? (quickHours || 0) : calculateTotalHours();
+    const displayedTotalHours = isEditing
+        ? draftTotalHours
+        : submission
+            ? submission.total_hours
+            : draftTotalHours;
+    const hoursValidationMessage = quickMode
+        ? (
+            !Number.isFinite(quickHours)
+                ? 'Total hours must be a valid number.'
+                : quickHours < 0
+                    ? 'Total hours cannot be negative.'
+                    : quickHours > MAX_WEEKLY_HOURS
+                        ? `Total weekly hours cannot exceed ${MAX_WEEKLY_HOURS}.`
+                        : null
+        )
+        : getEntryHoursValidationMessage('Past work', pastWork)
+            ?? getEntryHoursValidationMessage('Present work', presentWork)
+            ?? (draftTotalHours > MAX_WEEKLY_HOURS
+                ? `Total weekly hours cannot exceed ${MAX_WEEKLY_HOURS}.`
+                : null);
+
     const handleEntryChange = (
         id: string,
         field: keyof FormEntry,
         value: string | number,
         setter: React.Dispatch<React.SetStateAction<FormEntry[]>>
     ) => {
-        setter(prev => prev.map(e => e.id === id ? { ...e, [field]: value } : e));
+        const nextValue = field === 'hours' && typeof value === 'number'
+            ? Math.min(MAX_WEEKLY_HOURS, Math.max(0, value))
+            : value;
+        setter(prev => prev.map(e => e.id === id ? { ...e, [field]: nextValue } : e));
     };
 
     const prepareEntries = (entries: FormEntry[]): WorkEntry[] => {
@@ -379,6 +533,8 @@ export default function NewSubmissionPage() {
                 hours: e.hours || 0,
                 drive_link: e.drive_link || undefined,
                 tags: e.tags || [],
+                work_item_id: e.work_item_id || undefined,
+                work_item_status_update: e.work_item_status_update || undefined,
             }));
     };
 
@@ -417,13 +573,99 @@ export default function NewSubmissionPage() {
         setLastAutosavedAt(snapshot.savedAt);
     };
 
+    const persistAutosaveNow = useCallback(() => {
+        if (!autosaveKey || !isEditing) {
+            return;
+        }
+
+        const snapshot = buildAutosaveSnapshot();
+        if (!hasSnapshotContent(snapshot)) {
+            return;
+        }
+
+        window.localStorage.setItem(autosaveKey, JSON.stringify(snapshot));
+        setLastAutosavedAt(snapshot.savedAt);
+    }, [autosaveKey, buildAutosaveSnapshot, isEditing]);
+
+    const syncWeekStateAfterSave = useCallback((savedSubmission: Submission) => {
+        setWeekInfo((current) => {
+            if (!current || current.week_id !== savedSubmission.week_id) {
+                return current;
+            }
+
+            return {
+                ...current,
+                has_submission: true,
+                submission_id: savedSubmission.id,
+                submission_status: savedSubmission.status,
+            };
+        });
+
+        setSelectableWeeks((current) => current.map((week) => (
+            week.week_id === savedSubmission.week_id
+                ? {
+                    ...week,
+                    has_submission: true,
+                    submission_id: savedSubmission.id,
+                    submission_status: savedSubmission.status,
+                }
+                : week
+        )));
+    }, []);
+
+    const handleWeekSelectionChange = (nextWeekId: string) => {
+        const selectedWeek = selectableWeeks.find((week) => week.week_id === nextWeekId);
+        if (!selectedWeek) {
+            return;
+        }
+
+        persistAutosaveNow();
+
+        if (selectedProjectId && selectedWeek.submission_id) {
+            navigate(`/submissions/${selectedWeek.submission_id}`);
+            return;
+        }
+
+        const currentWeekOption = selectableWeeks.find((week) => week.is_current);
+        const destination = currentWeekOption && selectedWeek.week_id === currentWeekOption.week_id
+            ? '/submissions/new'
+            : `/submissions/new?week=${encodeURIComponent(selectedWeek.week_id)}`;
+
+        navigate(destination);
+    };
+
+    const handleDeleteSubmission = async () => {
+        if (!submissionId || !submission) return;
+        const label = submission.status === 'submitted' ? 'submitted' : 'draft';
+        if (!window.confirm(`Delete this ${label} submission for ${submission.week_id}? This cannot be undone.`)) return;
+        setIsDeleting(true);
+        try {
+            await api.deleteSubmission(submissionId);
+            navigate('/submissions');
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to delete submission.');
+        } finally {
+            setIsDeleting(false);
+        }
+    };
+
     const handleSaveDraft = async () => {
+        setSaveSuccess(false);
+        if (!selectedProjectId) {
+            setError('Choose a project before saving this submission.');
+            return;
+        }
+        if (hoursValidationMessage) {
+            setError(hoursValidationMessage);
+            return;
+        }
         setIsSubmitting(true);
         setError(null);
-        setSaveSuccess(false);
         try {
             const payload = quickMode
                 ? {
+                    project_id: selectedProjectId,
+                    week_id: targetWeekId,
                     past_work: quickSummary.trim() ? [{ description: quickSummary, hours: quickHours || 0 }] : [],
                     present_work: [] as WorkEntry[],
                     future_work: [] as WorkEntry[],
@@ -431,6 +673,8 @@ export default function NewSubmissionPage() {
                     notes: notes || undefined,
                 }
                 : {
+                    project_id: selectedProjectId,
+                    week_id: targetWeekId,
                     past_work: prepareEntries(pastWork),
                     present_work: prepareEntries(presentWork),
                     future_work: prepareEntries(futureWork),
@@ -440,6 +684,7 @@ export default function NewSubmissionPage() {
                 };
             const result = await api.createOrUpdateSubmission(payload);
             setSubmission(result);
+            syncWeekStateAfterSave(result);
             clearAutosave();
             setSaveSuccess(true);
             setTimeout(() => setSaveSuccess(false), 3000);
@@ -451,11 +696,21 @@ export default function NewSubmissionPage() {
     };
 
     const handleSubmit = async () => {
+        if (!selectedProjectId) {
+            setError('Choose a project before submitting this update.');
+            return;
+        }
+        if (hoursValidationMessage) {
+            setError(hoursValidationMessage);
+            return;
+        }
         setIsSubmitting(true);
         setError(null);
         try {
             const payload = quickMode
                 ? {
+                    project_id: selectedProjectId,
+                    week_id: targetWeekId,
                     past_work: quickSummary.trim() ? [{ description: quickSummary, hours: quickHours || 0 }] : [],
                     present_work: [] as WorkEntry[],
                     future_work: [] as WorkEntry[],
@@ -464,6 +719,8 @@ export default function NewSubmissionPage() {
                     mood_rating: moodRating ?? undefined,
                 }
                 : {
+                    project_id: selectedProjectId,
+                    week_id: targetWeekId,
                     past_work: prepareEntries(pastWork),
                     present_work: prepareEntries(presentWork),
                     future_work: prepareEntries(futureWork),
@@ -483,38 +740,6 @@ export default function NewSubmissionPage() {
         }
     };
 
-    const handleDownload = async (file: FileInfo) => {
-        try {
-            if (file.web_link) {
-                await openPortalAwareLink(file.web_link);
-                return;
-            }
-
-            const { url } = await api.getFileDownloadLink(file.id);
-            window.open(url, '_blank', 'noopener,noreferrer');
-        } catch (err) {
-            setError(err instanceof Error ? err.message : 'Download failed');
-        }
-    };
-
-    const handleDeleteFile = async (file: FileInfo) => {
-        if (!confirm(`Delete "${file.name}"? This cannot be undone.`)) return;
-        try {
-            await api.deleteFile(file.id);
-            setDriveFiles(prev => prev.filter(f => f.id !== file.id));
-        } catch (err) {
-            setError(err instanceof Error ? err.message : 'Delete failed');
-        }
-    };
-
-    const refreshFiles = () => {
-        const targetWeek = submission?.week_id || weekInfo?.week_id;
-        if (targetWeek) {
-            api.listFiles({ week_id: targetWeek })
-                .then(setDriveFiles)
-                .catch(() => { });
-        }
-    };
 
     if (authLoading || isLoading) {
         return (
@@ -525,6 +750,10 @@ export default function NewSubmissionPage() {
     }
 
     const displayWeekId = targetWeekId;
+    const selectedWeekOption = selectableWeeks.find((week) => week.week_id === displayWeekId) || null;
+    const weekReference = selectedWeekOption?.is_current
+        ? 'this week'
+        : displayWeekId || 'this submission week';
     const displayDateRange = submission
         ? `${format(parseISO(submission.week_start), 'MMM d')} - ${format(parseISO(submission.week_end), 'MMM d, yyyy')}`
         : weekInfo
@@ -533,24 +762,24 @@ export default function NewSubmissionPage() {
     const submissionWindowNotice = isBeforeSubmissionWindow && submissionWindowStart
         ? {
             tone: 'info' as const,
-            message: `This week's update opens ${format(submissionWindowStart, 'EEE, MMM d')} at ${format(submissionWindowStart, 'p')}. You can draft ideas here, but saving and submitting stay disabled until the window opens.`,
+            message: `${weekReference.charAt(0).toUpperCase()}${weekReference.slice(1)} opens ${format(submissionWindowStart, 'EEE, MMM d')} at ${format(submissionWindowStart, 'p')}. You can draft ideas here, but saving and submitting stay disabled until the window opens.`,
         }
         : isClosedAfterDeadline && submissionDeadline
             ? {
                 tone: 'warning' as const,
-                message: `This week's submission window closed on ${format(submissionDeadline, 'EEE, MMM d')} at ${format(submissionDeadline, 'p')}. Contact an admin if it needs to be reopened.`,
+                message: `The ${displayWeekId} submission window closed on ${format(submissionDeadline, 'EEE, MMM d')} at ${format(submissionDeadline, 'p')}. Contact an admin if it needs to be reopened.`,
             }
             : isLateSubmissionMode && submissionDeadline
                 ? {
                     tone: 'info' as const,
-                    message: `The regular deadline passed on ${format(submissionDeadline, 'EEE, MMM d')} at ${format(submissionDeadline, 'p')}, but late submissions are still allowed right now.`,
+                    message: `The regular deadline for ${displayWeekId} passed on ${format(submissionDeadline, 'EEE, MMM d')} at ${format(submissionDeadline, 'p')}, but late submissions are still allowed right now.`,
                 }
                 : null;
     const actionHelperText = isSubmissionWindowLocked
-        ? 'This week is currently view-only, so saving and submitting are disabled.'
+        ? 'This submission week is currently view-only, so saving and submitting are disabled.'
         : isLateSubmissionMode
             ? 'Late submissions are currently allowed. Save a draft or submit when this update is ready.'
-            : "Save a draft to keep working later, or submit when this week's update looks complete.";
+            : 'Save a draft to keep working later, or submit when this update looks complete.';
     const detailedSectionEntries = settings?.form_sections.map((section) => {
         if (section.id === 'past') return pastWork;
         if (section.id === 'present') return presentWork;
@@ -576,6 +805,14 @@ export default function NewSubmissionPage() {
     const progressPercent = completionSummary.total > 0
         ? Math.round((completionSummary.completed / completionSummary.total) * 100)
         : 0;
+    const submissionGuidelines = [
+        `You can report anywhere from 0 to ${MAX_WEEKLY_HOURS} hours for the week. If you had no hours, submit 0 with a short explanation in notes or blockers.`,
+        'Use the week picker to catch up on a recent missed week without leaving this form.',
+        'Choose the project carefully because project members can view the full submission and its notes once it is saved or submitted.',
+        'Use Quick check-in mode for a short summary and total hours. Use the detailed view when you want to break work into past, present, and future sections.',
+        'Save Draft keeps the update editable. Submit for Review when you are ready for a reviewer to see it.',
+        'Use blockers for anything waiting on help, approval, missing access, or missing information.',
+    ];
 
     return (
         <div className="page-wrapper">
@@ -606,12 +843,7 @@ export default function NewSubmissionPage() {
                                 )}
                                 <div className="stat-card" style={{ padding: '1rem 1.5rem' }}>
                                     <div className="stat-value" style={{ fontSize: '1.5rem' }}>
-                                        {submission
-                                            ? `${submission.total_hours.toFixed(1)}h`
-                                            : quickMode
-                                                ? `${(quickHours || 0).toFixed(1)}h`
-                                                : `${calculateTotalHours().toFixed(1)}h`
-                                        }
+                                        {`${displayedTotalHours.toFixed(1)}h`}
                                     </div>
                                     <div className="stat-label">Total Hours</div>
                                 </div>
@@ -640,13 +872,108 @@ export default function NewSubmissionPage() {
                                         This submission has been reviewed and cannot be edited.
                                     </span>
                                 )}
-                                {!canEdit && (
-                                    <span style={{ marginLeft: '0.75rem', fontSize: '0.8rem', color: 'var(--color-error)' }}>
-                                        Your edit window has expired. Contact an admin.
-                                    </span>
-                                )}
                             </div>
                         )}
+                        {isEditing && (
+                            <p
+                                style={{
+                                    margin: '0.75rem 0 0',
+                                    fontSize: '0.8rem',
+                                    color: hoursValidationMessage ? 'var(--color-error)' : 'var(--color-text-muted)',
+                                }}
+                            >
+                                {hoursValidationMessage || `Enter a total between 0 and ${MAX_WEEKLY_HOURS}. Zero-hour check-ins are okay when you add context.`}
+                            </p>
+                        )}
+
+                        {selectableWeeks.length > 0 && (
+                            <div
+                                style={{
+                                    marginTop: '1.25rem',
+                                    padding: '1rem 1.25rem',
+                                    background: 'white',
+                                    border: '1px solid var(--color-border)',
+                                    borderRadius: 'var(--radius-md)',
+                                    boxShadow: 'var(--shadow-sm, 0 8px 24px rgba(15, 23, 42, 0.06))',
+                                }}
+                            >
+                                <div className="flex justify-between items-center" style={{ gap: '1rem', flexWrap: 'wrap' }}>
+                                    <div style={{ flex: '1 1 260px' }}>
+                                        <p style={{ margin: 0, fontSize: '0.78rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-text-muted)' }}>
+                                            Submission Week
+                                        </p>
+                                        <p style={{ margin: '0.35rem 0 0', fontSize: '0.92rem', color: 'var(--color-text-secondary)' }}>
+                                            {selectedWeekOption
+                                                ? describeSelectableWeek(selectedWeekOption)
+                                                : 'Choose the week you want to update or backfill.'}
+                                        </p>
+                                    </div>
+                                    <div style={{ minWidth: '280px', flex: '0 1 320px' }}>
+                                        <label htmlFor="submission-week-select" style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, color: 'var(--color-text-secondary)', marginBottom: '0.45rem' }}>
+                                            Week
+                                        </label>
+                                        <select
+                                            id="submission-week-select"
+                                            className="form-select"
+                                            value={displayWeekId}
+                                            onChange={(event) => handleWeekSelectionChange(event.target.value)}
+                                            disabled={isSubmitting}
+                                            style={{ width: '100%', background: 'white' }}
+                                        >
+                                            {selectableWeeks.map((week) => (
+                                                <option key={week.week_id} value={week.week_id}>
+                                                    {formatSelectableWeekLabel(week)}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        <div
+                            style={{
+                                marginTop: '1.25rem',
+                                padding: '1rem 1.25rem',
+                                background: 'white',
+                                border: '1px solid var(--color-border)',
+                                borderRadius: 'var(--radius-md)',
+                                boxShadow: 'var(--shadow-sm, 0 8px 24px rgba(15, 23, 42, 0.06))',
+                            }}
+                        >
+                            <div className="flex justify-between items-center" style={{ gap: '1rem', flexWrap: 'wrap' }}>
+                                <div style={{ flex: '1 1 260px' }}>
+                                    <p style={{ margin: 0, fontSize: '0.78rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-text-muted)' }}>
+                                        Project
+                                    </p>
+                                    <p style={{ margin: '0.35rem 0 0', fontSize: '0.92rem', color: 'var(--color-text-secondary)' }}>
+                                        {selectedProject
+                                            ? `This update will be visible to all members of ${selectedProject.name}.`
+                                            : 'Choose the project this weekly update belongs to before saving or submitting.'}
+                                    </p>
+                                </div>
+                                <div style={{ minWidth: '280px', flex: '0 1 320px' }}>
+                                    <label htmlFor="submission-project-select" style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, color: 'var(--color-text-secondary)', marginBottom: '0.45rem' }}>
+                                        Project
+                                    </label>
+                                    <select
+                                        id="submission-project-select"
+                                        className="form-select"
+                                        value={selectedProjectId}
+                                        onChange={(event) => setSelectedProjectId(event.target.value)}
+                                        disabled={isSubmitting || Boolean(submissionId)}
+                                        style={{ width: '100%', background: 'white' }}
+                                    >
+                                        <option value="">Select a project</option>
+                                        {projects.map((project) => (
+                                            <option key={project.id} value={project.id}>
+                                                {project.name}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     {error && (
@@ -681,6 +1008,15 @@ export default function NewSubmissionPage() {
                     )}
 
                     {/* ── Carry-Forward Goals Banner ──────────────── */}
+                    <GuidancePanel
+                        title="Weekly Update Tips"
+                        description="These short rules help volunteers fill out updates consistently and help reviewers scan them faster."
+                        items={submissionGuidelines}
+                        icon={<Zap size={18} />}
+                        tone="gold"
+                        style={{ marginBottom: '1.5rem' }}
+                    />
+
                     {pendingRecovery && (
                         <div
                             style={{
@@ -805,7 +1141,84 @@ export default function NewSubmissionPage() {
                                 </div>
                             </div>
                         </div>
-                    )}{/* ── Quick Check-in Toggle ──────────────────── */}
+                    )}
+
+                    {/* ── Assigned Work Item Suggestions ───────────── */}
+                    {isEditing && !quickMode && assignedWorkItems.length > 0 && (() => {
+                        const usedIds = new Set(
+                            [...pastWork, ...presentWork, ...futureWork]
+                                .map(e => e.work_item_id)
+                                .filter(Boolean) as string[]
+                        );
+                        return (
+                            <div style={{
+                                marginBottom: '1.5rem',
+                                padding: '1rem 1.25rem',
+                                background: '#f8fafc',
+                                border: '1px solid #e2e8f0',
+                                borderRadius: 'var(--radius-md)',
+                            }}>
+                                <p style={{ margin: '0 0 0.75rem 0', fontSize: '0.8rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                                    📋 Your assigned board items — click to add
+                                </p>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                    {assignedWorkItems.map(item => {
+                                        const alreadyAdded = usedIds.has(item.id);
+                                        const statusColors: Record<string, { bg: string; text: string }> = {
+                                            pending: { bg: '#f1f5f9', text: '#64748b' },
+                                            active:  { bg: '#ecfdf5', text: '#059669' },
+                                            blocked: { bg: '#fff7ed', text: '#ea580c' },
+                                            finished: { bg: '#f0fdf4', text: '#16a34a' },
+                                        };
+                                        const sc = statusColors[item.status] ?? statusColors.pending;
+                                        return (
+                                            <button
+                                                key={item.id}
+                                                type="button"
+                                                disabled={alreadyAdded}
+                                                onClick={() => {
+                                                    const newEntry: FormEntry = {
+                                                        id: Math.random().toString(36).substr(2, 9),
+                                                        description: item.title,
+                                                        hours: 0,
+                                                        drive_link: '',
+                                                        tags: [],
+                                                        work_item_id: item.id,
+                                                        work_item_status_update: 'finished',
+                                                    };
+                                                    setPastWork(prev => {
+                                                        const hasContent = prev.some(e => e.description.trim());
+                                                        return hasContent ? [...prev, newEntry] : [newEntry];
+                                                    });
+                                                }}
+                                                style={{
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    gap: '0.4rem',
+                                                    padding: '0.35rem 0.75rem',
+                                                    borderRadius: '999px',
+                                                    border: `1px solid ${alreadyAdded ? '#e2e8f0' : '#cbd5e1'}`,
+                                                    background: alreadyAdded ? '#f8fafc' : 'white',
+                                                    color: alreadyAdded ? '#94a3b8' : '#1e293b',
+                                                    fontSize: '0.8rem',
+                                                    fontWeight: 600,
+                                                    cursor: alreadyAdded ? 'default' : 'pointer',
+                                                    opacity: alreadyAdded ? 0.55 : 1,
+                                                    transition: 'all 0.15s',
+                                                }}
+                                            >
+                                                <span style={{ width: 7, height: 7, borderRadius: '50%', background: sc.text, flexShrink: 0 }} />
+                                                {item.title}
+                                                {alreadyAdded && <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>✓</span>}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        );
+                    })()}
+
+                    {/* ── Quick Check-in Toggle ──────────────────── */}
                     {isEditing && !submissionId && (
                         <div style={{
                             display: 'flex',
@@ -882,10 +1295,11 @@ export default function NewSubmissionPage() {
                                         <input
                                             type="number"
                                             min="0"
+                                            max={MAX_WEEKLY_HOURS}
                                             step="0.5"
                                             placeholder="Total hours"
                                             value={quickHours || ''}
-                                            onChange={(e) => setQuickHours(parseFloat(e.target.value) || 0)}
+                                            onChange={(e) => setQuickHours(parseHoursInput(e.target.value))}
                                             className="form-input"
                                             style={{ padding: '0.5rem', fontSize: '1rem', fontWeight: 600 }}
                                         />
@@ -992,19 +1406,6 @@ export default function NewSubmissionPage() {
                             <CardTitle>📁 Files & Attachments</CardTitle>
                         </CardHeader>
                         <div style={{ padding: '0 1rem 1rem' }}>
-                            {fileAccessNotice && (
-                                <div style={{
-                                    marginBottom: '1rem',
-                                    padding: '0.85rem 1rem',
-                                    borderRadius: 'var(--radius-md)',
-                                    background: 'var(--color-warning-bg)',
-                                    color: 'var(--color-text-primary)',
-                                    border: '1px solid rgba(245, 158, 11, 0.3)',
-                                    fontSize: '0.875rem',
-                                }}>
-                                    {fileAccessNotice}
-                                </div>
-                            )}
                             {/* Upload form — only in edit mode */}
                             {isEditing && (
                                 <>
@@ -1013,129 +1414,13 @@ export default function NewSubmissionPage() {
                                     </p>
                                     <FileUpload
                                         weekId={submission?.week_id || weekInfo?.week_id}
-                                        onFileUploaded={() => refreshFiles()}
+                                        projectId={selectedProjectId || undefined}
+                                        submissionId={submission?.id}
+                                        sourceType="submission"
+                                        disabled={!submission?.id}
+                                        disabledMessage="Save this submission as a draft first, then attach files so they stay linked to the submission and project."
                                     />
                                 </>
-                            )}
-
-                            {/* File list — always visible */}
-                            {filesLoading ? (
-                                <div style={{ textAlign: 'center', padding: '1rem' }}>
-                                    <LoadingSpinner size={24} />
-                                    <p style={{ fontSize: '0.875rem', color: 'var(--color-text-muted)', marginTop: '0.5rem' }}>Loading files...</p>
-                                </div>
-                            ) : driveFiles.length > 0 ? (
-                                <div style={{ marginTop: isEditing ? '1.5rem' : '0' }}>
-                                    <h4 style={{ marginBottom: '0.75rem', fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>
-                                        {isEditing ? 'Previously Uploaded Files' : 'Uploaded Files'} ({driveFiles.length})
-                                    </h4>
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                                        {driveFiles.map((file) => (
-                                            <div
-                                                key={file.id}
-                                                style={{
-                                                    display: 'flex',
-                                                    alignItems: 'center',
-                                                    gap: '0.75rem',
-                                                    padding: '0.75rem',
-                                                    background: 'var(--color-bg-secondary)',
-                                                    borderRadius: 'var(--radius-md)',
-                                                    border: '1px solid var(--color-border)',
-                                                }}
-                                            >
-                                                <FileText size={20} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
-
-                                                <div style={{ flex: 1, minWidth: 0 }}>
-                                                    <p style={{
-                                                        margin: 0,
-                                                        fontSize: '0.875rem',
-                                                        fontWeight: 500,
-                                                        overflow: 'hidden',
-                                                        textOverflow: 'ellipsis',
-                                                        whiteSpace: 'nowrap',
-                                                    }}>
-                                                        {file.name}
-                                                    </p>
-                                                    {file.size && (
-                                                        <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-                                                            {formatFileSize(parseInt(file.size))}
-                                                        </p>
-                                                    )}
-                                                </div>
-
-                                                {/* Actions */}
-                                                <div style={{ display: 'flex', gap: '0.25rem', flexShrink: 0 }}>
-                                                    {file.web_link && (
-                                                        <a
-                                                            href={file.web_link}
-                                                            target="_blank"
-                                                            rel="noopener noreferrer"
-                                                            title="Open in Drive"
-                                                            style={{
-                                                                display: 'flex',
-                                                                alignItems: 'center',
-                                                                justifyContent: 'center',
-                                                                width: '32px',
-                                                                height: '32px',
-                                                                borderRadius: 'var(--radius-md)',
-                                                                color: 'var(--color-primary-gold)',
-                                                                background: 'none',
-                                                                border: 'none',
-                                                                cursor: 'pointer',
-                                                            }}
-                                                        >
-                                                            <ExternalLink size={16} />
-                                                        </a>
-                                                    )}
-                                                    <button
-                                                        onClick={() => handleDownload(file)}
-                                                        title="Download"
-                                                        style={{
-                                                            display: 'flex',
-                                                            alignItems: 'center',
-                                                            justifyContent: 'center',
-                                                            width: '32px',
-                                                            height: '32px',
-                                                            borderRadius: 'var(--radius-md)',
-                                                            color: 'var(--color-text-secondary)',
-                                                            background: 'none',
-                                                            border: 'none',
-                                                            cursor: 'pointer',
-                                                        }}
-                                                    >
-                                                        <Download size={16} />
-                                                    </button>
-                                                    {isEditing && (
-                                                        <button
-                                                            onClick={() => handleDeleteFile(file)}
-                                                            title="Delete"
-                                                            style={{
-                                                                display: 'flex',
-                                                                alignItems: 'center',
-                                                                justifyContent: 'center',
-                                                                width: '32px',
-                                                                height: '32px',
-                                                                borderRadius: 'var(--radius-md)',
-                                                                color: 'var(--color-error)',
-                                                                background: 'none',
-                                                                border: 'none',
-                                                                cursor: 'pointer',
-                                                            }}
-                                                        >
-                                                            <Trash2 size={16} />
-                                                        </button>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            ) : (
-                                !isEditing && (
-                                    <p style={{ fontSize: '0.875rem', color: 'var(--color-text-muted)', textAlign: 'center', padding: '1rem 0' }}>
-                                        No files uploaded for this week.
-                                    </p>
-                                )
                             )}
                         </div>
                     </Card>
@@ -1215,15 +1500,26 @@ export default function NewSubmissionPage() {
                                         {actionHelperText}
                                     </p>
                                 </div>
-                                <Button variant="ghost" onClick={() => submissionId ? setIsEditing(false) : navigate('/dashboard')} disabled={isSubmitting}>
+                                {submissionId && submission && submission.status !== 'reviewed' && (
+                                    <Button
+                                        variant="ghost"
+                                        onClick={handleDeleteSubmission}
+                                        disabled={isSubmitting || isDeleting}
+                                        isLoading={isDeleting}
+                                        style={{ color: '#ef4444', marginRight: 'auto' }}
+                                    >
+                                        <Trash2 size={16} /> Delete
+                                    </Button>
+                                )}
+                                <Button variant="ghost" onClick={() => submissionId ? setIsEditing(false) : navigate('/dashboard')} disabled={isSubmitting || isDeleting}>
                                     Cancel
                                 </Button>
                             </div>
                             <div className="flex gap-3" style={{ justifyContent: 'flex-end', marginTop: '1rem', flexWrap: 'wrap' }}>
-                                <Button variant="secondary" onClick={handleSaveDraft} disabled={isSubmitting || !canPersistSubmission} isLoading={isSubmitting}>
+                                <Button variant="secondary" onClick={handleSaveDraft} disabled={isSubmitting || !canPersistSubmission || Boolean(hoursValidationMessage)} isLoading={isSubmitting}>
                                     <Save size={18} /> Save Draft
                                 </Button>
-                                <Button variant="primary" onClick={handleSubmit} disabled={isSubmitting || !canPersistSubmission} isLoading={isSubmitting}>
+                                <Button variant="primary" onClick={handleSubmit} disabled={isSubmitting || !canPersistSubmission || Boolean(hoursValidationMessage)} isLoading={isSubmitting}>
                                     <Send size={18} /> Submit for Review
                                 </Button>
                             </div>
@@ -1237,6 +1533,31 @@ export default function NewSubmissionPage() {
 }
 
 // ── Read-Only Entries ───────────────────────────────────────────────────
+
+function formatSelectableWeekLabel(week: SelectableSubmissionWeek) {
+    const dateRange = `${format(parseISO(week.week_start), 'MMM d')} - ${format(parseISO(week.week_end), 'MMM d')}`;
+    const statusSuffix = week.has_submission && week.submission_status
+        ? ` • ${week.submission_status}`
+        : week.is_current
+            ? ' • Current week'
+            : ' • Missed week';
+
+    return `${week.week_id} (${dateRange})${statusSuffix}`;
+}
+
+function describeSelectableWeek(week: SelectableSubmissionWeek) {
+    const dateRange = `${format(parseISO(week.week_start), 'MMM d')} - ${format(parseISO(week.week_end), 'MMM d, yyyy')}`;
+
+    if (week.has_submission && week.submission_status) {
+        return `${week.week_id} covers ${dateRange}. A ${week.submission_status} submission already exists for this week.`;
+    }
+
+    if (week.is_current) {
+        return `${week.week_id} covers ${dateRange}. Start here for your current weekly update.`;
+    }
+
+    return `${week.week_id} covers ${dateRange}. Use it to backfill a missed weekly update.`;
+}
 
 function hasFilledEntries(entries: FormEntry[]) {
     return entries.some((entry) => {
@@ -1384,10 +1705,11 @@ function WorkEntryList({
                                     <input
                                         type="number"
                                         min="0"
+                                        max={MAX_WEEKLY_HOURS}
                                         step="0.5"
                                         placeholder="Hours"
                                         value={entry.hours || ''}
-                                        onChange={(e) => onChange(entry.id, 'hours', parseFloat(e.target.value) || 0, setEntries)}
+                                        onChange={(e) => onChange(entry.id, 'hours', parseHoursInput(e.target.value), setEntries)}
                                         className="form-input"
                                         style={{ padding: '0.5rem 0.5rem 0.5rem 2.25rem', fontWeight: 600, width: '100%' }}
                                     />
@@ -1411,6 +1733,32 @@ function WorkEntryList({
                             style={{ padding: '0.4rem 0.5rem', fontSize: '0.85rem', flex: 1 }}
                         />
                     </div>
+                    {/* Linked work item indicator + status update */}
+                    {entry.work_item_id && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: '0.75rem', color: '#0ea5e9', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                                📌 Linked to board item
+                            </span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>Mark as:</span>
+                                <select
+                                    value={entry.work_item_status_update || ''}
+                                    onChange={e => setEntries(prev => prev.map(en =>
+                                        en.id === entry.id
+                                            ? { ...en, work_item_status_update: e.target.value as FormEntry['work_item_status_update'] }
+                                            : en
+                                    ))}
+                                    style={{ fontSize: '0.75rem', padding: '0.2rem 0.4rem', borderRadius: '0.375rem', border: '1px solid var(--color-border)', background: 'white', color: 'var(--color-text-primary)', cursor: 'pointer' }}
+                                >
+                                    <option value="">— no change —</option>
+                                    <option value="active">Active (still in progress)</option>
+                                    <option value="blocked">Blocked</option>
+                                    <option value="finished">Finished ✓</option>
+                                </select>
+                            </div>
+                        </div>
+                    )}
+
                     {/* Category Tags */}
                     {categories.length > 0 && (
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
@@ -1453,8 +1801,3 @@ function WorkEntryList({
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-function formatFileSize(bytes: number): string {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}

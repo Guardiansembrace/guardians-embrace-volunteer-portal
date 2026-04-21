@@ -4,7 +4,7 @@ import { useAuth } from '../lib/useAuth';
 import { api } from '../lib/api';
 import type { AdminAccessGrant, AdminAccessScope, AllowedEmail, User } from '../lib/api';
 import { Navbar, Footer } from '../components/Layout';
-import { Button, Badge, LoadingSpinner, EmptyState } from '../components/ui';
+import { Badge, Button, EmptyState, GuidancePanel, LoadingSpinner } from '../components/ui';
 import { Users, Search, UserCheck, UserX, Shield, ChevronLeft, Plus, X, Mail, ListFilter, RefreshCw } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 
@@ -498,6 +498,20 @@ export default function AdminUsersPage() {
                                             : 'View the directory and the areas you were delegated to handle.'}
                         </p>
                     </div>
+
+                    <GuidancePanel
+                        title="Access Management Tips"
+                        description="Short guidance here helps admins make safer access decisions without slowing down day-to-day operations."
+                        items={[
+                            'Invite people with the lowest role that fits the job, then add delegated admin scopes only when they truly need broader access.',
+                            'Deactivate users when access should pause but their history and audit trail should stay intact.',
+                            'Use delegated access expiry dates for temporary coverage, handoffs, or vacation backups.',
+                            'Pending first login and access record labels show whether someone has only been invited or has already completed sign-in.',
+                        ]}
+                        icon={<Shield size={18} />}
+                        tone="slate"
+                        style={{ marginBottom: '2rem' }}
+                    />
 
                     {canViewUsers && (
                     <div style={{ background: 'white', borderRadius: '16px', border: '1px solid #e2e8f0', boxShadow: '0 4px 15px rgba(0,0,0,0.02)', padding: '1.5rem', marginBottom: '2rem' }}>

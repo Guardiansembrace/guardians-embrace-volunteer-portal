@@ -10,6 +10,9 @@ from typing import List, Optional, Union
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_ENV_FILE = BACKEND_ROOT / ".env"
+
 
 def load_shared_config() -> dict:
     """Load shared configuration from the monorepo shared folder."""
@@ -25,7 +28,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(DEFAULT_ENV_FILE),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -101,6 +104,7 @@ class Settings(BaseSettings):
     # Frontend URL (used in outgoing emails)
     frontend_url: str = "http://localhost:5173"
     file_download_token_expire_minutes: int = 5
+    private_file_storage_backend: str = "auto"
 
     # AWS / S3
     aws_region: str = "us-east-1"
@@ -125,6 +129,16 @@ class Settings(BaseSettings):
         if (val.startswith("'") and val.endswith("'")) or (val.startswith('"') and val.endswith('"')):
             return val[1:-1]
         return val
+
+    @field_validator("private_file_storage_backend", mode="before")
+    @classmethod
+    def normalize_private_file_storage_backend(cls, value: str) -> str:
+        """Accept a small, explicit set of private upload backends."""
+        normalized = (value or "auto").strip().lower()
+        allowed_values = {"auto", "drive", "s3", "local"}
+        if normalized not in allowed_values:
+            raise ValueError("private_file_storage_backend must be one of: auto, drive, s3, local")
+        return normalized
     
     @property
     def admin_email_list(self) -> List[str]:

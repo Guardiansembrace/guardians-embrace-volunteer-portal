@@ -147,6 +147,19 @@ $frontendBaseUrl = if ([string]::IsNullOrWhiteSpace($FrontendUrl)) {
     $FrontendUrl
 }
 
+$googleApplicationCredentials = ''
+if ($backendEnv.ContainsKey('GOOGLE_APPLICATION_CREDENTIALS') -and -not [string]::IsNullOrWhiteSpace($backendEnv['GOOGLE_APPLICATION_CREDENTIALS'])) {
+    $googleApplicationCredentials = $backendEnv['GOOGLE_APPLICATION_CREDENTIALS']
+} elseif (Test-Path (Join-Path $repoRoot 'backend\service-account.json')) {
+    $googleApplicationCredentials = 'service-account.json'
+}
+
+$privateFileStorageBackend = if ($backendEnv.ContainsKey('PRIVATE_FILE_STORAGE_BACKEND')) {
+    $backendEnv['PRIVATE_FILE_STORAGE_BACKEND']
+} else {
+    'auto'
+}
+
 $lambdaEnvPath = Join-Path $repoRoot '.deployment\aws\lambda-environment.json'
 @{
     Variables = @{
@@ -167,6 +180,9 @@ $lambdaEnvPath = Join-Path $repoRoot '.deployment\aws\lambda-environment.json'
         ADMIN_EMAILS                      = if ($backendEnv.ContainsKey('ADMIN_EMAILS')) { $backendEnv['ADMIN_EMAILS'] } else { '' }
         ALLOWED_ORIGINS                   = $allowedOrigins
         FRONTEND_URL                      = $frontendBaseUrl
+        GOOGLE_DRIVE_SHARED_DRIVE_ID      = if ($backendEnv.ContainsKey('GOOGLE_DRIVE_SHARED_DRIVE_ID')) { $backendEnv['GOOGLE_DRIVE_SHARED_DRIVE_ID'] } else { '' }
+        GOOGLE_DRIVE_CREDENTIALS_JSON     = if ($backendEnv.ContainsKey('GOOGLE_DRIVE_CREDENTIALS_JSON')) { $backendEnv['GOOGLE_DRIVE_CREDENTIALS_JSON'] } else { '' }
+        GOOGLE_APPLICATION_CREDENTIALS    = $googleApplicationCredentials
         WEEKLY_UPDATE_START_DAY           = if ($backendEnv.ContainsKey('WEEKLY_UPDATE_START_DAY')) { $backendEnv['WEEKLY_UPDATE_START_DAY'] } else { 'friday' }
         WEEKLY_UPDATE_END_DAY             = if ($backendEnv.ContainsKey('WEEKLY_UPDATE_END_DAY')) { $backendEnv['WEEKLY_UPDATE_END_DAY'] } else { 'sunday' }
         TIMEZONE                          = if ($backendEnv.ContainsKey('TIMEZONE')) { $backendEnv['TIMEZONE'] } else { 'America/New_York' }
@@ -180,6 +196,7 @@ $lambdaEnvPath = Join-Path $repoRoot '.deployment\aws\lambda-environment.json'
         SMTP_USE_SSL                      = if ($backendEnv.ContainsKey('SMTP_USE_SSL')) { $backendEnv['SMTP_USE_SSL'] } else { 'false' }
         SMTP_VALIDATE_CERTS               = if ($backendEnv.ContainsKey('SMTP_VALIDATE_CERTS')) { $backendEnv['SMTP_VALIDATE_CERTS'] } else { 'true' }
         FILE_DOWNLOAD_TOKEN_EXPIRE_MINUTES = if ($backendEnv.ContainsKey('FILE_DOWNLOAD_TOKEN_EXPIRE_MINUTES')) { $backendEnv['FILE_DOWNLOAD_TOKEN_EXPIRE_MINUTES'] } else { '5' }
+        PRIVATE_FILE_STORAGE_BACKEND      = $privateFileStorageBackend
         AWS_S3_BUCKET                     = $names.UploadsBucketName
         AWS_PUBLIC_ASSETS_BASE_URL        = if ($backendEnv.ContainsKey('AWS_PUBLIC_ASSETS_BASE_URL')) { $backendEnv['AWS_PUBLIC_ASSETS_BASE_URL'] } else { '' }
     }

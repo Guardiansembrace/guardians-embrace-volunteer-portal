@@ -31,6 +31,8 @@ export interface WorkEntry {
     hours: number;
     drive_link?: string;
     tags?: string[];
+    work_item_id?: string;
+    work_item_status_update?: 'pending' | 'active' | 'blocked' | 'finished';
 }
 
 export type SubmissionStatus = 'draft' | 'submitted' | 'reviewed';
@@ -121,6 +123,16 @@ export interface UploadedFile {
     mime_type: string;
     drive_link: string;
     uploaded_at: string;
+    storage_type?: 'shared_drive' | 's3' | 'local';
+    project_file_id?: string;
+    project_id?: string;
+    project_name?: string;
+    submission_id?: string;
+    work_item_id?: string;
+    source_type?: 'submission' | 'project' | 'work_item';
+    uploaded_by_name?: string;
+    week_id?: string;
+    size_bytes?: number;
 }
 
 export interface DriveStatus {

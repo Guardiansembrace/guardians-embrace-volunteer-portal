@@ -41,6 +41,11 @@ from app.models.project_work_item import (
     ProjectWorkItemUpdate,
     ProjectWorkItemResponse,
 )
+from app.models.project_file import (
+    ProjectFile,
+    ProjectFileSourceType,
+    ProjectFileResponse,
+)
 from app.models.project_join_request import (
     ProjectJoinRequest,
     ProjectJoinRequestStatus,
@@ -97,6 +102,9 @@ __all__ = [
     "ProjectWorkItemCreate",
     "ProjectWorkItemUpdate",
     "ProjectWorkItemResponse",
+    "ProjectFile",
+    "ProjectFileSourceType",
+    "ProjectFileResponse",
     # Project join requests
     "ProjectJoinRequest",
     "ProjectJoinRequestStatus",

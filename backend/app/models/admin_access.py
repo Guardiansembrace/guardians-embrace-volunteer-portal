@@ -44,6 +44,10 @@ class AdminAccessGrant(Document):
 
     class Settings:
         name = "admin_access_grants"
+        indexes = [
+            [("user_id", 1), ("is_active", 1)],
+            [("is_active", 1), ("updated_at", -1)],
+        ]
 
 
 class AdminAccessGrantCreate(BaseModel):

@@ -4,7 +4,7 @@ import { useAuth } from '../lib/useAuth';
 import { api } from '../lib/api';
 import type { AdminSettings, FormSection, WeeklyUpdateSettings } from '../lib/api';
 import { Navbar, Footer } from '../components/Layout';
-import { Button, Input, LoadingSpinner } from '../components/ui';
+import { Button, GuidancePanel, Input, LoadingSpinner } from '../components/ui';
 import { Settings, Plus, Trash2, Save, GripVertical, CheckCircle, ChevronLeft } from 'lucide-react';
 
 const DAY_OPTIONS: WeeklyUpdateSettings['deadline_day'][] = [
@@ -178,6 +178,20 @@ export default function AdminSettingsPage() {
                             </Button>
                         </div>
                     </div>
+
+                    <GuidancePanel
+                        title="What To Tune Here"
+                        description="Short, action-based configuration copy makes the volunteer experience easier to scan and reduces form confusion."
+                        items={[
+                            'Keep section titles short and use subtitles as plain-language instructions for what volunteers should enter.',
+                            'Only enable time tracking on sections where hours are useful, otherwise volunteers may feel pushed to over-explain.',
+                            'Schedule settings control the dashboard deadline card, submission window messaging, and when save/submit actions lock.',
+                            'Current system hours validation still allows totals from 0 to 168 per week. This screen does not change that limit yet.',
+                        ]}
+                        icon={<Settings size={18} />}
+                        tone="slate"
+                        style={{ marginBottom: '2rem' }}
+                    />
 
                     {isLoading || !settings ? (
                         <div style={{ display: 'flex', justifyContent: 'center', padding: '5rem 0' }}>

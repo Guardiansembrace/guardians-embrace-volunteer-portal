@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from app.core.admin_access import AdminAccessScope, require_admin_scopes
 from app.core.rate_limit import rate_limit_by_user
 from app.core.config import get_settings
+from app.core.email_identity import find_document_by_email, normalize_email
 from app.core.email import send_email, build_invitation_html, is_email_configured
 from app.models.user import User, UserRole
 from app.models.allowed_email import AllowedEmail, AllowedEmailCreate, AllowedEmailRecord, InvitePortalStatus
@@ -22,10 +23,12 @@ def _build_invited_user_name(email: str) -> str:
 
 
 async def _sync_pending_user(email: str, role: UserRole) -> None:
-    existing_user = await User.find_one(User.email == email)
+    normalized_email = normalize_email(email)
+    existing_user = await find_document_by_email(User, normalized_email)
     if existing_user:
+        existing_user.email = normalized_email
         if existing_user.invited_only:
-            existing_user.name = _build_invited_user_name(email)
+            existing_user.name = _build_invited_user_name(normalized_email)
             existing_user.role = role
             existing_user.is_active = True
             existing_user.profile_complete = False
@@ -34,8 +37,8 @@ async def _sync_pending_user(email: str, role: UserRole) -> None:
         return
 
     placeholder_user = User(
-        email=email,
-        name=_build_invited_user_name(email),
+        email=normalized_email,
+        name=_build_invited_user_name(normalized_email),
         role=role,
         is_active=True,
         profile_complete=False,
@@ -46,7 +49,7 @@ async def _sync_pending_user(email: str, role: UserRole) -> None:
 
 
 async def _build_invite_record(invite: AllowedEmail) -> AllowedEmailRecord:
-    linked_user = await User.find_one(User.email == invite.email)
+    linked_user = await find_document_by_email(User, invite.email)
     is_pending_login = linked_user is None or linked_user.invited_only
 
     return AllowedEmailRecord(
@@ -89,8 +92,10 @@ async def invite_user(
     """
     Invite a user by email (add to allowed list) and send an email notification.
     """
+    normalized_email = normalize_email(invite_in.email)
+
     # Check if email is already allowed
-    existing_invite = await AllowedEmail.find_one(AllowedEmail.email == invite_in.email)
+    existing_invite = await find_document_by_email(AllowedEmail, normalized_email)
     if existing_invite:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -98,9 +103,9 @@ async def invite_user(
         )
         
     invite = AllowedEmail(
-        email=invite_in.email,
+        email=normalized_email,
         role=invite_in.role,
-        invited_by=current_admin.email
+        invited_by=normalize_email(current_admin.email)
     )
     await invite.insert()
     await _sync_pending_user(invite.email, invite.role)
@@ -138,14 +143,15 @@ async def revoke_invite(
     """
     Revoke an invitation.
     """
-    invite = await AllowedEmail.find_one(AllowedEmail.email == email)
+    normalized_email = normalize_email(email)
+    invite = await find_document_by_email(AllowedEmail, normalized_email)
     if not invite:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Invitation not found"
         )
 
-    pending_user = await User.find_one(User.email == email)
+    pending_user = await find_document_by_email(User, normalized_email)
     if pending_user and pending_user.invited_only:
         pending_user.is_active = False
         await pending_user.save()
@@ -165,7 +171,7 @@ async def resend_invite(
     """
     Resend an invitation email.
     """
-    invite = await AllowedEmail.find_one(AllowedEmail.email == email)
+    invite = await find_document_by_email(AllowedEmail, email)
     if not invite:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -179,7 +185,7 @@ async def resend_invite(
         html_body = build_invitation_html(
             email=invite.email,
             role=invite.role,
-            invited_by=invite.invited_by or current_admin.email or "Admin",
+            invited_by=invite.invited_by or normalize_email(current_admin.email) or "Admin",
             portal_url=settings.frontend_url,
         )
         background_tasks.add_task(

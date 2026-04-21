@@ -1,4 +1,4 @@
-import { createContext, useState, useEffect, useCallback } from 'react';
+import { createContext, useState, useEffect, useCallback, useMemo } from 'react';
 import type { ReactNode } from 'react';
 import { api } from './api';
 import type { AdminAccessScope, User } from './api';
@@ -27,7 +27,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const [user, setUser] = useState<User | null>(null);
     const [isLoading, setIsLoading] = useState(true);
 
-    const adminScopes = user?.admin_access?.scopes ?? [];
+    const adminScopes = useMemo(() => user?.admin_access?.scopes ?? [], [user?.admin_access?.scopes]);
     const isAdmin = user?.role === 'admin';
     const canAccessAdminPortal = isAdmin || Boolean(user?.admin_access?.can_access_portal);
     const hasAdminScope = useCallback(
