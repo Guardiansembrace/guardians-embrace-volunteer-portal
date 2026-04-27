@@ -18,6 +18,7 @@ from app.core.email_identity import find_document_by_email, normalize_email
 from app.core.rate_limit import rate_limit_by_ip
 from app.core.security import create_access_token, verify_google_token, get_current_user
 from app.core.time import utc_now
+from app.core.user_stats import sync_user_submission_stats
 from app.models.audit_log import AuditLogEventType
 from app.models.user import User, UserRole, UserResponse
 from app.models.allowed_email import AllowedEmail
@@ -149,6 +150,11 @@ async def login_with_google(request: GoogleLoginRequest, http_request: Request):
             
             await user.save()
             logger.info("Existing user logged in: %s", email)
+
+        try:
+            await sync_user_submission_stats(user)
+        except Exception:
+            logger.warning("Failed to sync submission stats during login for %s", email, exc_info=True)
         
         # Create JWT token
         token_data = {

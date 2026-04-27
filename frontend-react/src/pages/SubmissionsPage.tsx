@@ -21,7 +21,7 @@ function isDeletable(sub: SubmissionSummary): boolean {
 
 export default function SubmissionsPage() {
     const navigate = useNavigate();
-    const { isAuthenticated, isLoading: authLoading } = useAuth();
+    const { isAuthenticated, isLoading: authLoading, refreshUser } = useAuth();
     const [submissions, setSubmissions] = useState<SubmissionSummary[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -44,6 +44,7 @@ export default function SubmissionsPage() {
         setDeletingId(sub.id);
         try {
             await api.deleteSubmission(sub.id);
+            await refreshUser();
             setSubmissions(prev => prev.filter(s => s.id !== sub.id));
         } catch (err) {
             window.alert(err instanceof Error ? err.message : 'Failed to delete submission.');
@@ -71,7 +72,7 @@ export default function SubmissionsPage() {
         );
     }
 
-    const totalHours = submissions.reduce((sum, s) => sum + s.total_hours, 0);
+    const totalHours = submissions.reduce((sum, s) => sum + (s.reported_hours ?? s.total_hours), 0);
 
     return (
         <div className="page-wrapper">
@@ -99,7 +100,7 @@ export default function SubmissionsPage() {
                             'Submitted means the weekly update is ready for a reviewer to look at.',
                             'Reviewed means that week has been finalized unless an admin reopens it.',
                             'Use New or Missed Week when you need to backfill a recent week you did not submit on time.',
-                            'Hours shown here are weekly totals. Open a submission to see the entry-by-entry breakdown, blockers, and notes.',
+                            'Hours shown here are the reported hours saved on each submission. Open a submission to compare reported and credited hours.',
                         ]}
                         icon={<FileText size={18} />}
                         tone="slate"
@@ -112,7 +113,7 @@ export default function SubmissionsPage() {
                             <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--color-text-primary)', lineHeight: 1 }}>{submissions.length}</div>
                         </div>
                         <div className="card" style={{ padding: '1.25rem' }}>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.25rem' }}>Total Hours</div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.25rem' }}>Reported Hours</div>
                             <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--color-text-primary)', lineHeight: 1 }}>{totalHours.toFixed(1)}<span style={{ fontSize: '1rem', color: 'var(--color-text-secondary)' }}>h</span></div>
                         </div>
                         <div className="card" style={{ padding: '1.25rem' }}>
@@ -137,7 +138,7 @@ export default function SubmissionsPage() {
                                     <thead>
                                         <tr>
                                             <th scope="col" style={{ display: 'flex', alignItems: 'center' }}><Calendar size={14} style={{ marginRight: '0.4rem' }} />Week</th>
-                                            <th scope="col">Hours</th>
+                                            <th scope="col">Reported</th>
                                             <th scope="col">Status</th>
                                             <th scope="col" className="hidden-mobile">Blockers</th>
                                             <th scope="col" className="hidden-mobile">Submitted</th>
@@ -148,7 +149,7 @@ export default function SubmissionsPage() {
                                         {submissions.map((sub) => (
                                             <tr key={sub.id}>
                                                 <td><strong style={{ color: 'var(--color-primary-gold)' }}>{sub.week_id}</strong></td>
-                                                <td>{sub.total_hours.toFixed(1)}h</td>
+                                                <td>{(sub.reported_hours ?? sub.total_hours).toFixed(1)}h</td>
                                                 <td><Badge variant={sub.status as 'draft' | 'submitted' | 'reviewed'}>{sub.status}</Badge></td>
                                                 <td className="hidden-mobile">
                                                     {sub.has_blockers ? (

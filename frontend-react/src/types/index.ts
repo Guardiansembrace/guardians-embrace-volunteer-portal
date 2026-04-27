@@ -48,6 +48,8 @@ export interface Submission {
     past_work: WorkEntry[];
     present_work: WorkEntry[];
     future_work: WorkEntry[];
+    reported_hours: number;
+    credited_hours: number;
     total_hours: number;
     blockers?: string;
     notes?: string;
@@ -65,6 +67,8 @@ export interface SubmissionSummary {
     user_id: string;
     user_name: string;
     week_id: string;
+    reported_hours: number;
+    credited_hours: number;
     total_hours: number;
     status: SubmissionStatus;
     submitted_at?: string;

@@ -256,6 +256,8 @@ describe('ApiClient', () => {
                     past_work: [],
                     present_work: [],
                     future_work: [],
+                    reported_hours: 2,
+                    credited_hours: 0,
                     total_hours: 2,
                     status: 'draft',
                     created_at: '2026-03-16T00:00:00Z',

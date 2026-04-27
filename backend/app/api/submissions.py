@@ -5,7 +5,6 @@ Handles weekly volunteer submissions - create, update, submit, and review.
 
 import logging
 from datetime import timedelta
-from math import isfinite
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
@@ -18,7 +17,14 @@ from app.core.config import load_shared_config
 from app.core.project_access import can_contribute_to_project, can_view_project_submission
 from app.core.rate_limit import rate_limit_by_user
 from app.core.security import get_current_user
+from app.core.submission_hours import (
+    MAX_WEEKLY_HOURS,
+    calculate_submission_hour_totals,
+    get_current_hour_tracking_sections,
+    sync_submission_total_hours,
+)
 from app.core.time import utc_now
+from app.core.user_stats import sync_user_submission_stats, sync_user_submission_stats_by_user_id
 from app.core.utils import (
     can_submit_for_week,
     get_schedule_now,
@@ -46,7 +52,6 @@ from app.models.submission import (
 router = APIRouter(prefix="/submissions", tags=["Submissions"])
 project_router = APIRouter(prefix="/projects", tags=["Submissions"])
 
-MAX_WEEKLY_HOURS = 168.0
 MAX_SELECTABLE_SUBMISSION_WEEKS = 8
 
 
@@ -168,33 +173,7 @@ async def build_week_info(current_user: User, week_id: str, project_id: str | No
 
 async def refresh_user_submission_stats(current_user: User) -> None:
     """Recalculate denormalized submission totals and streaks from persisted data."""
-    submitted_entries = await Submission.find(
-        Submission.user_id == str(current_user.id),
-        Submission.status != SubmissionStatus.DRAFT,
-    ).to_list()
-
-    current_user.total_submissions = len(submitted_entries)
-    current_user.total_hours = sum((entry.total_hours for entry in submitted_entries), 0.0)
-
-    if not submitted_entries:
-        current_user.submission_streak = 0
-        await current_user.save()
-        return
-
-    submitted_week_ids = {entry.week_id for entry in submitted_entries}
-    latest_week_id = max(
-        submitted_week_ids,
-        key=lambda candidate_week_id: get_week_boundaries(candidate_week_id)[0],
-    )
-
-    streak = 0
-    week_cursor = latest_week_id
-    while week_cursor in submitted_week_ids:
-        streak += 1
-        week_cursor = get_previous_week_id(week_cursor)
-
-    current_user.submission_streak = streak
-    await current_user.save()
+    await sync_user_submission_stats(current_user)
 
 
 async def apply_work_item_status_updates(entries: list[WorkEntry], current_user: "User") -> None:
@@ -243,59 +222,61 @@ async def apply_work_item_status_updates(entries: list[WorkEntry], current_user:
         logger.info("Work item %s status → %s (via submission by %s)", wid, new_status, current_user.email)
 
 
-def calculate_total_hours(submission_data: SubmissionCreate) -> float:
-    """Calculate total hours from all work entries."""
-    total = 0.0
-    for section_name, entries in (
-        ("Past work", submission_data.past_work),
-        ("Present work", submission_data.present_work),
-    ):
-        for index, entry in enumerate(entries, start=1):
-            if not isfinite(entry.hours):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"{section_name} entry {index} hours must be a valid number.",
-                )
-            if entry.hours < 0:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"{section_name} entry {index} hours cannot be negative.",
-                )
-            if entry.hours > MAX_WEEKLY_HOURS:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"{section_name} entry {index} hours cannot exceed {MAX_WEEKLY_HOURS:.0f}.",
-                )
-            total += entry.hours
-
-    if total > MAX_WEEKLY_HOURS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Total weekly hours cannot exceed {MAX_WEEKLY_HOURS:.0f}.",
-        )
-
-    return total
-
-
-def build_submission_create_payload(submission: Submission) -> SubmissionCreate:
-    """Rebuild a submission payload for validation and total recalculation."""
-    return SubmissionCreate(
-        project_id=getattr(submission, "project_id", "legacy-project"),
-        past_work=submission.past_work,
-        present_work=submission.present_work,
-        future_work=submission.future_work,
-        blockers=submission.blockers,
-        notes=submission.notes,
-        mood_rating=submission.mood_rating,
-        custom_responses=submission.custom_responses or {},
+async def sync_submission_total_hours_if_needed(submission: Submission) -> bool:
+    """Recalculate a submission's total hours and persist when a stale value is found."""
+    previous_snapshot = (
+        getattr(submission, "reported_hours", None),
+        getattr(submission, "credited_hours", None),
+        getattr(submission, "total_hours", None),
+        tuple(getattr(submission, "hour_tracking_sections", []) or []),
     )
+    sync_submission_total_hours(submission)
+    next_snapshot = (
+        getattr(submission, "reported_hours", None),
+        getattr(submission, "credited_hours", None),
+        getattr(submission, "total_hours", None),
+        tuple(getattr(submission, "hour_tracking_sections", []) or []),
+    )
+    if next_snapshot == previous_snapshot:
+        return False
+
+    try:
+        await submission.save()
+    except Exception:
+        logger.warning(
+            "Failed to persist synced hours for submission %s",
+            getattr(submission, "id", None),
+            exc_info=True,
+        )
+    return True
 
 
-def sync_submission_total_hours(submission: Submission) -> float:
-    """Validate stored hours and keep the persisted total in sync."""
-    total_hours = calculate_total_hours(build_submission_create_payload(submission))
-    submission.total_hours = total_hours
-    return total_hours
+async def sync_submission_totals_for_collection(submissions: list[Submission]) -> None:
+    """Best-effort total-hours repair for a list of submissions."""
+    tracked_sections = await get_current_hour_tracking_sections()
+    for submission in submissions:
+        try:
+            previous_snapshot = (
+                getattr(submission, "reported_hours", None),
+                getattr(submission, "credited_hours", None),
+                getattr(submission, "total_hours", None),
+                tuple(getattr(submission, "hour_tracking_sections", []) or []),
+            )
+            sync_submission_total_hours(submission, tracked_sections)
+            next_snapshot = (
+                getattr(submission, "reported_hours", None),
+                getattr(submission, "credited_hours", None),
+                getattr(submission, "total_hours", None),
+                tuple(getattr(submission, "hour_tracking_sections", []) or []),
+            )
+            if next_snapshot != previous_snapshot:
+                await submission.save()
+        except Exception:
+            logger.warning(
+                "Failed to recalculate hours for submission %s",
+                getattr(submission, "id", None),
+                exc_info=True,
+            )
 
 
 def submission_to_response(s: Submission) -> SubmissionResponse:
@@ -314,7 +295,9 @@ def submission_to_response(s: Submission) -> SubmissionResponse:
         past_work=s.past_work,
         present_work=s.present_work,
         future_work=s.future_work,
-        total_hours=s.total_hours,
+        reported_hours=getattr(s, "reported_hours", getattr(s, "total_hours", 0.0)),
+        credited_hours=getattr(s, "credited_hours", getattr(s, "reported_hours", getattr(s, "total_hours", 0.0))),
+        total_hours=getattr(s, "total_hours", getattr(s, "reported_hours", 0.0)),
         blockers=s.blockers,
         notes=s.notes,
         mood_rating=s.mood_rating,
@@ -339,7 +322,9 @@ def submission_to_summary(s: Submission) -> SubmissionSummary:
         project_id=getattr(s, "project_id", ""),
         project_name=getattr(s, "project_name", None),
         week_id=s.week_id,
-        total_hours=s.total_hours,
+        reported_hours=getattr(s, "reported_hours", getattr(s, "total_hours", 0.0)),
+        credited_hours=getattr(s, "credited_hours", getattr(s, "reported_hours", getattr(s, "total_hours", 0.0))),
+        total_hours=getattr(s, "total_hours", getattr(s, "reported_hours", 0.0)),
         status=s.status,
         submitted_at=s.submitted_at,
         has_blockers=bool(s.blockers and s.blockers.strip()),
@@ -487,6 +472,7 @@ async def get_hours_trend(
         Submission.user_id == str(current_user.id),
         {"week_id": {"$in": week_ids}},
     ).to_list()
+    await sync_submission_totals_for_collection(submissions)
 
     sub_map = {s.week_id: s for s in submissions}
 
@@ -523,6 +509,7 @@ async def get_attendance(
         Submission.user_id == str(current_user.id),
         {"week_id": {"$in": week_ids}},
     ).to_list()
+    await sync_submission_totals_for_collection(submissions)
 
     sub_map = {s.week_id: s for s in submissions}
 
@@ -565,6 +552,7 @@ async def get_my_submissions(
     submissions = await Submission.find(
         Submission.user_id == str(current_user.id)
     ).sort(-Submission.week_start).skip(skip).limit(limit).to_list()
+    await sync_submission_totals_for_collection(submissions)
     
     return [submission_to_summary(s) for s in submissions]
 
@@ -595,6 +583,7 @@ async def get_submissions_stats(
         Submission.week_id == target_week,
         In(Submission.status, [SubmissionStatus.SUBMITTED, SubmissionStatus.REVIEWED])
     ).to_list()
+    await sync_submission_totals_for_collection(week_submissions)
     total_hours = sum(s.total_hours for s in week_submissions)
     
     # Count submissions with blockers
@@ -648,7 +637,8 @@ async def create_or_update_submission(
             detail="The submission window for the selected week is currently closed.",
         )
 
-    total_hours = calculate_total_hours(data)
+    tracked_sections = await get_current_hour_tracking_sections()
+    totals = calculate_submission_hour_totals(data, tracked_sections)
     project = await _get_submission_project_or_403(data.project_id, current_user)
     
     # Check for existing submission
@@ -685,7 +675,7 @@ async def create_or_update_submission(
         existing.notes = data.notes
         existing.mood_rating = data.mood_rating
         existing.custom_responses = data.custom_responses
-        existing.total_hours = total_hours
+        sync_submission_total_hours(existing, tracked_sections)
         existing.project_name = project.name
         existing.updated_at = utc_now()
         
@@ -713,7 +703,10 @@ async def create_or_update_submission(
         notes=data.notes,
         mood_rating=data.mood_rating,
         custom_responses=data.custom_responses,
-        total_hours=total_hours,
+        hour_tracking_sections=sorted(tracked_sections),
+        reported_hours=totals.reported_hours,
+        credited_hours=totals.credited_hours,
+        total_hours=totals.total_hours,
         status=SubmissionStatus.DRAFT,
         created_at=utc_now(),
         updated_at=utc_now(),
@@ -741,6 +734,7 @@ async def list_all_submissions(
         query["status"] = status_filter
     
     submissions = await Submission.find(query).sort(-Submission.created_at).skip(skip).limit(limit).to_list()
+    await sync_submission_totals_for_collection(submissions)
     
     return [submission_to_summary(s) for s in submissions]
 
@@ -761,6 +755,7 @@ async def get_submission(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Submission not found"
         )
+    await sync_submission_total_hours_if_needed(submission)
     
     # Users can only view their own submissions unless they have operations access
     access = await get_admin_access_context(current_user)
@@ -823,7 +818,10 @@ async def submit_submission(
         )
 
     sync_submission_total_hours(submission)
-    
+
+    all_entries = list(submission.past_work) + list(submission.present_work) + list(submission.future_work)
+    await apply_work_item_status_updates(all_entries, current_user)
+
     submission.status = SubmissionStatus.SUBMITTED
     submission.submitted_at = utc_now()
     submission.updated_at = utc_now()
@@ -865,7 +863,7 @@ async def review_submission(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cannot review a draft submission"
         )
-    
+    sync_submission_total_hours(submission)
     submission.status = SubmissionStatus.REVIEWED
     submission.reviewed_by = str(current_user.id)
     submission.reviewed_at = utc_now()
@@ -923,7 +921,9 @@ async def delete_submission(
                 detail=f"Submissions can only be deleted within {_DELETE_WINDOW_DAYS} days of submission",
             )
 
+    deleted_submission_owner_id = submission.user_id
     await submission.delete()
+    await sync_user_submission_stats_by_user_id(deleted_submission_owner_id)
     return None
 
 
@@ -937,6 +937,7 @@ async def get_project_submissions(
     """List all submissions visible within a project."""
     await _get_submission_project_for_view(project_id, current_user)
     submissions = await Submission.find({"project_id": project_id}).sort(-Submission.week_start).skip(skip).limit(limit).to_list()
+    await sync_submission_totals_for_collection(submissions)
     return [submission_to_summary(submission) for submission in submissions]
 
 
@@ -959,4 +960,5 @@ async def get_project_submission(
             detail="Submission not found",
         )
 
+    await sync_submission_total_hours_if_needed(submission)
     return submission_to_response(submission)

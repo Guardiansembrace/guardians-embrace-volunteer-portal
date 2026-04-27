@@ -279,7 +279,7 @@ export default function AdminDashboardPage() {
                                             value={stats.submissions.submitted_this_week}
                                             icon={<Activity size={22} />}
                                             tone="default"
-                                            subtext={`${stats.submissions.this_week_hours.toFixed(1)} hours logged`}
+                                            subtext={`${stats.submissions.this_week_hours.toFixed(1)} reported hours logged`}
                                             href={submittedThisWeekHref}
                                             actionLabel="Open this week's queue"
                                         />

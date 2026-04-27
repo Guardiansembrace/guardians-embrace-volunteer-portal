@@ -41,12 +41,15 @@ class SubmissionBase(BaseModel):
     future_work: List[WorkEntry] = []  # What is planned
     
     # Summary
+    reported_hours: float = 0.0
+    credited_hours: float = 0.0
     total_hours: float = 0.0
     blockers: Optional[str] = None
     notes: Optional[str] = None
     
     # Custom forms
     custom_responses: dict = {}
+    hour_tracking_sections: List[str] = []
     
     # Status
     status: SubmissionStatus = SubmissionStatus.DRAFT
@@ -82,6 +85,8 @@ class Submission(Document, SubmissionBase):
     future_work: List[WorkEntry] = []
     
     # Summary
+    reported_hours: float = 0.0
+    credited_hours: float = 0.0
     total_hours: float = 0.0
     blockers: Optional[str] = None
     notes: Optional[str] = None
@@ -131,6 +136,8 @@ class Submission(Document, SubmissionBase):
                 "future_work": [
                     {"description": "Plan community workshop", "hours": 0.0}
                 ],
+                "reported_hours": 6.0,
+                "credited_hours": 4.0,
                 "total_hours": 6.0,
                 "blockers": None,
                 "status": "submitted"
@@ -176,6 +183,8 @@ class SubmissionResponse(BaseModel):
     past_work: List[WorkEntry]
     present_work: List[WorkEntry]
     future_work: List[WorkEntry]
+    reported_hours: float
+    credited_hours: float
     total_hours: float
     blockers: Optional[str]
     notes: Optional[str]
@@ -201,6 +210,8 @@ class SubmissionSummary(BaseModel):
     project_id: str
     project_name: Optional[str] = None
     week_id: str
+    reported_hours: float
+    credited_hours: float
     total_hours: float
     status: SubmissionStatus
     submitted_at: Optional[datetime]

@@ -124,6 +124,8 @@ export interface Submission {
     past_work: WorkEntry[];
     present_work: WorkEntry[];
     future_work: WorkEntry[];
+    reported_hours: number;
+    credited_hours: number;
     total_hours: number;
     blockers?: string;
     notes?: string;
@@ -146,6 +148,8 @@ export interface SubmissionSummary {
     project_id: string;
     project_name?: string;
     week_id: string;
+    reported_hours: number;
+    credited_hours: number;
     total_hours: number;
     status: 'draft' | 'submitted' | 'reviewed';
     submitted_at?: string;

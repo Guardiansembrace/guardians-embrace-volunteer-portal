@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 import SubmissionsPage from './SubmissionsPage';
@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
     navigate: vi.fn(),
     useAuth: vi.fn(),
     getMySubmissions: vi.fn(),
+    deleteSubmission: vi.fn(),
+    refreshUser: vi.fn(),
 }));
 
 vi.mock('../lib/useAuth', () => ({
@@ -17,6 +19,7 @@ vi.mock('../lib/useAuth', () => ({
 vi.mock('../lib/api', () => ({
     api: {
         getMySubmissions: mocks.getMySubmissions,
+        deleteSubmission: mocks.deleteSubmission,
     },
 }));
 
@@ -47,6 +50,7 @@ describe('SubmissionsPage', () => {
         mocks.useAuth.mockReturnValue({
             isAuthenticated: true,
             isLoading: false,
+            refreshUser: mocks.refreshUser,
         });
         mocks.getMySubmissions.mockResolvedValue([
             {
@@ -54,6 +58,8 @@ describe('SubmissionsPage', () => {
                 user_id: 'user-1',
                 user_name: 'Portal User',
                 week_id: '2026-W14',
+                reported_hours: 5,
+                credited_hours: 5,
                 total_hours: 5,
                 status: 'submitted',
                 submitted_at: '2026-04-07T13:00:00Z',
@@ -64,12 +70,16 @@ describe('SubmissionsPage', () => {
                 user_id: 'user-1',
                 user_name: 'Portal User',
                 week_id: '2026-W13',
+                reported_hours: 2.5,
+                credited_hours: 2.5,
                 total_hours: 2.5,
                 status: 'draft',
                 submitted_at: null,
                 has_blockers: false,
             },
         ]);
+        mocks.deleteSubmission.mockResolvedValue(undefined);
+        mocks.refreshUser.mockResolvedValue(undefined);
     });
 
     it('renders submission history, totals, and blocker status', async () => {
@@ -103,6 +113,7 @@ describe('SubmissionsPage', () => {
         mocks.useAuth.mockReturnValue({
             isAuthenticated: false,
             isLoading: false,
+            refreshUser: mocks.refreshUser,
         });
 
         renderSubmissionsPage();
@@ -111,5 +122,25 @@ describe('SubmissionsPage', () => {
             expect(mocks.navigate).toHaveBeenCalledWith('/login');
         });
         expect(mocks.getMySubmissions).not.toHaveBeenCalled();
+    });
+
+    it('refreshes the signed-in user after deleting a submission', async () => {
+        const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+        renderSubmissionsPage();
+
+        expect(await screen.findByText('My Submissions')).toBeInTheDocument();
+        const draftRow = screen.getByText('2026-W13').closest('tr');
+        expect(draftRow).not.toBeNull();
+        const draftRowButtons = draftRow!.querySelectorAll('button');
+        expect(draftRowButtons.length).toBeGreaterThan(1);
+        fireEvent.click(draftRowButtons[1] as HTMLElement);
+
+        await waitFor(() => {
+            expect(mocks.deleteSubmission).toHaveBeenCalledWith('sub-2');
+        });
+        expect(mocks.refreshUser).toHaveBeenCalledTimes(1);
+
+        confirmSpy.mockRestore();
     });
 });

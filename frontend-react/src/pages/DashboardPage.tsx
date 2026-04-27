@@ -476,7 +476,7 @@ export default function DashboardPage() {
                                 />
                                 <StatCard
                                     value={(user?.total_hours ?? 0).toFixed(1)}
-                                    label="Total hours"
+                                    label="Credited hours"
                                     icon={<Clock3 size={24} />}
                                 />
                                 <StatCard
@@ -539,7 +539,7 @@ export default function DashboardPage() {
                                                                 {submission.status}
                                                             </Badge>
                                                         </td>
-                                                        <td data-label="Hours" className="hidden-mobile">{submission.total_hours.toFixed(1)}h</td>
+                                                        <td data-label="Hours" className="hidden-mobile">{(submission.reported_hours ?? submission.total_hours).toFixed(1)}h</td>
                                                         <td data-label="Needs attention" className="hidden-mobile">
                                                             {submission.has_blockers ? (
                                                                 <Link
@@ -617,7 +617,7 @@ export default function DashboardPage() {
                                                             {submission.status}
                                                         </Badge>
                                                     </td>
-                                                    <td data-label="Hours" className="hidden-mobile">{submission.total_hours.toFixed(1)}h</td>
+                                                    <td data-label="Hours" className="hidden-mobile">{(submission.reported_hours ?? submission.total_hours).toFixed(1)}h</td>
                                                     <td data-label="Submitted" className="hidden-mobile">
                                                         {submission.submitted_at
                                                             ? format(parseISO(submission.submitted_at), 'MMM d, yyyy')

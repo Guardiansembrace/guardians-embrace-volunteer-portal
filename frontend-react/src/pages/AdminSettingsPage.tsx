@@ -184,7 +184,7 @@ export default function AdminSettingsPage() {
                         description="Short, action-based configuration copy makes the volunteer experience easier to scan and reduces form confusion."
                         items={[
                             'Keep section titles short and use subtitles as plain-language instructions for what volunteers should enter.',
-                            'Only enable time tracking on sections where hours are useful, otherwise volunteers may feel pushed to over-explain.',
+                            'Reported hours come from Past Work, Present Work, and timed custom sections, while credited hours only come from Past Work.',
                             'Schedule settings control the dashboard deadline card, submission window messaging, and when save/submit actions lock.',
                             'Current system hours validation still allows totals from 0 to 168 per week. This screen does not change that limit yet.',
                         ]}

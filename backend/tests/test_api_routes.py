@@ -27,6 +27,7 @@ from app.api import settings as settings_api
 from app.api import submissions as submissions_api
 from app.api import users as users_api
 from app.core import admin_access as admin_access_core
+from app.core import user_stats as user_stats_core
 from app.models.admin_access import AdminAccessGrantCreate, AdminAccessScope
 from app.models.settings import AdminSettings, FormSection, WeeklyUpdateSettings
 from app.models.submission import SubmissionStatus
@@ -42,6 +43,9 @@ class FakeField:
 
     def __ne__(self, other):
         return (self.name, "!=", other)
+
+    def __neg__(self):
+        return ("-", self.name)
 
 
 def make_user(
@@ -102,6 +106,10 @@ def make_user_response_payload(user):
 def api_client(monkeypatch):
     monkeypatch.setattr(db, "connect", AsyncMock())
     monkeypatch.setattr(db, "disconnect", AsyncMock())
+    monkeypatch.setattr(auth_api, "sync_user_submission_stats", AsyncMock(return_value=False), raising=False)
+    monkeypatch.setattr(users_api, "sync_user_submission_stats", AsyncMock(return_value=False), raising=False)
+    monkeypatch.setattr(submissions_api, "sync_user_submission_stats", AsyncMock(return_value=False), raising=False)
+    monkeypatch.setattr(submissions_api, "sync_user_submission_stats_by_user_id", AsyncMock(return_value=False), raising=False)
     rate_limit_core.reset_rate_limit_state()
 
     with TestClient(app) as client:
@@ -121,6 +129,57 @@ def test_get_current_user_profile_keeps_pending_login_state(api_client):
     body = response.json()
     assert body["invited_only"] is True
     assert body["last_login"] is None
+
+
+def test_get_current_user_profile_syncs_submission_stats(api_client, monkeypatch):
+    user = make_user()
+    sync_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr(users_api, "sync_user_submission_stats", sync_mock, raising=False)
+    app.dependency_overrides[get_current_user] = lambda: user
+
+    response = api_client.get("/api/v1/users/me")
+
+    assert response.status_code == 200
+    sync_mock.assert_awaited_once_with(user)
+
+
+@pytest.mark.asyncio
+async def test_sync_user_submission_stats_recalculates_stale_submission_totals(monkeypatch):
+    user = make_user()
+    user.total_hours = 0.0
+    stale_submission = SimpleNamespace(
+        id="submission-1",
+        week_id="2026-W16",
+        total_hours=0.0,
+        past_work=[{"description": "Calls", "hours": 2.5}],
+        present_work=[{"description": "Planning", "hours": 1.5}],
+        future_work=[],
+        blockers=None,
+        notes=None,
+        mood_rating=None,
+        custom_responses={},
+        project_id="project-1",
+        save=AsyncMock(),
+    )
+
+    monkeypatch.setattr(user_stats_core.Submission, "user_id", FakeField("user_id"), raising=False)
+    monkeypatch.setattr(user_stats_core.Submission, "status", FakeField("status"), raising=False)
+    monkeypatch.setattr(
+        user_stats_core.Submission,
+        "find",
+        MagicMock(return_value=SimpleNamespace(to_list=AsyncMock(return_value=[stale_submission]))),
+        raising=False,
+    )
+
+    changed = await user_stats_core.sync_user_submission_stats(user)
+
+    assert changed is True
+    assert user.total_hours == 2.5
+    assert stale_submission.reported_hours == 4.0
+    assert stale_submission.credited_hours == 2.5
+    assert stale_submission.total_hours == 4.0
+    stale_submission.save.assert_awaited_once()
+    user.save.assert_awaited_once()
 
 
 def test_team_lead_can_list_active_users_for_project_assignment(api_client, monkeypatch):
@@ -325,7 +384,7 @@ def test_create_submission_allows_recent_selected_week(api_client, monkeypatch):
             "project_id": "507f1f77bcf86cd799439012",
             "week_id": "2026-W11",
             "past_work": [{"description": "Catch-up outreach", "hours": 3}],
-            "present_work": [],
+            "present_work": [{"description": "Planning next week", "hours": 2}],
             "future_work": [],
             "blockers": "",
             "notes": "Backfilled missed week",
@@ -338,8 +397,143 @@ def test_create_submission_allows_recent_selected_week(api_client, monkeypatch):
     assert body["project_id"] == "507f1f77bcf86cd799439012"
     assert body["project_name"] == "Food Drive 2026"
     assert body["status"] == "draft"
-    assert body["total_hours"] == 3
+    assert body["reported_hours"] == 5
+    assert body["credited_hours"] == 3
+    assert body["total_hours"] == 5
     insert_mock.assert_awaited_once()
+
+
+def test_create_submission_counts_custom_section_hours_toward_reported_totals(api_client, monkeypatch):
+    user = make_user()
+    app.dependency_overrides[get_current_user] = lambda: user
+
+    insert_mock = AsyncMock()
+    project = SimpleNamespace(id="507f1f77bcf86cd799439012", name="Food Drive 2026")
+    monkeypatch.setattr(submissions_api, "get_week_id", lambda: "2026-W12")
+    monkeypatch.setattr(
+        submissions_api,
+        "get_week_boundaries",
+        lambda _week_id: (datetime(2026, 3, 16), datetime(2026, 3, 22)),
+    )
+    monkeypatch.setattr(submissions_api, "can_submit_for_week", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(submissions_api, "_get_submission_project_or_403", AsyncMock(return_value=project))
+    monkeypatch.setattr(submissions_api, "apply_work_item_status_updates", AsyncMock(), raising=False)
+    monkeypatch.setattr(submissions_api, "get_current_hour_tracking_sections", AsyncMock(return_value={"past", "present", "custom_ops"}), raising=False)
+    monkeypatch.setattr(submissions_api.Submission, "user_id", FakeField("user_id"), raising=False)
+    monkeypatch.setattr(submissions_api.Submission, "week_id", FakeField("week_id"), raising=False)
+    monkeypatch.setattr(submissions_api.Submission, "find_one", AsyncMock(return_value=None), raising=False)
+    monkeypatch.setattr(submissions_api.Submission, "insert", insert_mock, raising=False)
+    monkeypatch.setattr(submissions_api.Submission, "_document_settings", MagicMock(), raising=False)
+
+    response = api_client.post(
+        "/api/v1/submissions",
+        json={
+            "project_id": "507f1f77bcf86cd799439012",
+            "week_id": "2026-W12",
+            "past_work": [{"description": "Volunteer calls", "hours": 2}],
+            "present_work": [{"description": "Follow-up planning", "hours": 1.5}],
+            "future_work": [{"description": "Plan next sprint", "hours": 4}],
+            "custom_responses": {
+                "custom_ops": [{"description": "Partner sync", "hours": 1.5}],
+            },
+            "blockers": "",
+            "notes": "",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["reported_hours"] == 5.0
+    assert body["credited_hours"] == 2.0
+    assert body["total_hours"] == 5.0
+    insert_mock.assert_awaited_once()
+
+
+def test_get_my_submissions_recalculates_stale_total_hours(api_client, monkeypatch):
+    user = make_user()
+    app.dependency_overrides[get_current_user] = lambda: user
+
+    stale_submission = SimpleNamespace(
+        id="submission-1",
+        user_id=str(user.id),
+        user_name=user.name,
+        project_id="project-1",
+        project_name="Food Drive 2026",
+        week_id="2026-W16",
+        total_hours=0.0,
+        status=SubmissionStatus.SUBMITTED,
+        submitted_at="2026-04-12T15:00:00Z",
+        blockers=None,
+        is_late=False,
+        past_work=[{"description": "Calls", "hours": 2.5}],
+        present_work=[{"description": "Planning", "hours": 1.5}],
+        future_work=[],
+        notes=None,
+        mood_rating=None,
+        custom_responses={},
+        save=AsyncMock(),
+    )
+    chain = MagicMock()
+    chain.sort.return_value = chain
+    chain.skip.return_value = chain
+    chain.limit.return_value = chain
+    chain.to_list = AsyncMock(return_value=[stale_submission])
+    monkeypatch.setattr(submissions_api.Submission, "user_id", FakeField("user_id"), raising=False)
+    monkeypatch.setattr(submissions_api.Submission, "week_start", FakeField("week_start"), raising=False)
+    monkeypatch.setattr(submissions_api.Submission, "find", MagicMock(return_value=chain), raising=False)
+
+    response = api_client.get("/api/v1/submissions/my")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body[0]["week_id"] == "2026-W16"
+    assert body[0]["reported_hours"] == 4.0
+    assert body[0]["credited_hours"] == 2.5
+    assert body[0]["total_hours"] == 4.0
+    stale_submission.save.assert_awaited_once()
+
+
+def test_list_all_submissions_recalculates_stale_total_hours(api_client, monkeypatch):
+    admin = make_user(role=UserRole.ADMIN)
+    app.dependency_overrides[get_current_user] = lambda: admin
+
+    stale_submission = SimpleNamespace(
+        id="submission-1",
+        user_id="user-1",
+        user_name="Volunteer One",
+        project_id="project-1",
+        project_name="Food Drive 2026",
+        week_id="2026-W16",
+        total_hours=0.0,
+        status=SubmissionStatus.SUBMITTED,
+        submitted_at="2026-04-12T15:00:00Z",
+        blockers=None,
+        is_late=False,
+        past_work=[{"description": "Outreach", "hours": 3.0}],
+        present_work=[{"description": "Follow-up", "hours": 2.0}],
+        future_work=[],
+        notes=None,
+        mood_rating=None,
+        custom_responses={},
+        save=AsyncMock(),
+    )
+    chain = MagicMock()
+    chain.sort.return_value = chain
+    chain.skip.return_value = chain
+    chain.limit.return_value = chain
+    chain.to_list = AsyncMock(return_value=[stale_submission])
+    monkeypatch.setattr(submissions_api.Submission, "created_at", FakeField("created_at"), raising=False)
+    monkeypatch.setattr(submissions_api.Submission, "find", MagicMock(return_value=chain), raising=False)
+
+    response = api_client.get("/api/v1/submissions")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body[0]["user_name"] == "Volunteer One"
+    assert body[0]["reported_hours"] == 5.0
+    assert body[0]["credited_hours"] == 3.0
+    assert body[0]["total_hours"] == 5.0
+    stale_submission.save.assert_awaited_once()
 
 
 def test_create_submission_rejects_weeks_outside_backfill_window(api_client, monkeypatch):
@@ -477,6 +671,56 @@ def test_google_login_activates_existing_invited_user(api_client, monkeypatch):
     invited_user.save.assert_awaited_once()
     create_access_token_mock.assert_called_once()
     write_audit_log_mock.assert_awaited_once()
+
+
+def test_google_login_syncs_submission_stats_before_returning_user(api_client, monkeypatch):
+    existing_user = make_user()
+    sync_mock = AsyncMock(return_value=True)
+
+    monkeypatch.setattr(
+        auth_api,
+        "verify_google_token",
+        AsyncMock(
+            return_value={
+                "email": existing_user.email,
+                "sub": "google-user-3",
+                "name": "Portal User Updated",
+            }
+        ),
+    )
+    monkeypatch.setattr(auth_api, "get_settings", lambda: SimpleNamespace(is_admin=lambda _email: False))
+    monkeypatch.setattr(
+        auth_api,
+        "AllowedEmail",
+        SimpleNamespace(
+            email=FakeField("email"),
+            find_one=AsyncMock(return_value=SimpleNamespace(role=UserRole.VOLUNTEER)),
+        ),
+    )
+    monkeypatch.setattr(
+        auth_api,
+        "User",
+        SimpleNamespace(
+            email=FakeField("email"),
+            find_one=AsyncMock(return_value=existing_user),
+        ),
+    )
+    monkeypatch.setattr(auth_api, "sync_user_submission_stats", sync_mock, raising=False)
+    monkeypatch.setattr(auth_api, "create_access_token", MagicMock(return_value="signed-jwt"))
+    monkeypatch.setattr(
+        auth_api,
+        "build_user_response",
+        AsyncMock(side_effect=lambda user: make_user_response_payload(user)),
+    )
+    monkeypatch.setattr(auth_api, "write_audit_log", AsyncMock())
+
+    response = api_client.post(
+        "/api/v1/auth/google",
+        json={"access_token": "google-token"},
+    )
+
+    assert response.status_code == 200
+    sync_mock.assert_awaited_once_with(existing_user)
 
 
 def test_google_login_accepts_legacy_mixed_case_invite_record(api_client, monkeypatch):
@@ -621,7 +865,7 @@ def test_create_submission_rejects_total_hours_above_weekly_limit(api_client, mo
         "/api/v1/submissions",
         json={
             "project_id": "507f1f77bcf86cd799439012",
-            "past_work": [{"description": "Weekend event", "hours": 120}],
+            "past_work": [{"description": "Weekend event", "hours": 169}],
             "present_work": [{"description": "Planning", "hours": 60}],
             "future_work": [],
             "blockers": "",
@@ -630,7 +874,7 @@ def test_create_submission_rejects_total_hours_above_weekly_limit(api_client, mo
     )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "Total weekly hours cannot exceed 168."
+    assert response.json()["detail"] == "Past work entry 1 hours cannot exceed 168."
     find_one_mock.assert_not_awaited()
 
 
@@ -663,14 +907,14 @@ def test_submit_submission_rejects_invalid_draft_hours(api_client, monkeypatch):
         user_id=str(user.id),
         week_id="2026-W12",
         status=SubmissionStatus.DRAFT,
-        past_work=[{"description": "Weekend event", "hours": 120}],
+        past_work=[{"description": "Weekend event", "hours": 169}],
         present_work=[{"description": "Planning", "hours": 60}],
         future_work=[],
         blockers=None,
         notes=None,
         mood_rating=None,
         custom_responses={},
-        total_hours=180.0,
+        total_hours=169.0,
         save=AsyncMock(),
     )
 
@@ -680,9 +924,69 @@ def test_submit_submission_rejects_invalid_draft_hours(api_client, monkeypatch):
     response = api_client.post("/api/v1/submissions/507f1f77bcf86cd799439011/submit")
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "Total weekly hours cannot exceed 168."
+    assert response.json()["detail"] == "Past work entry 1 hours cannot exceed 168."
     fake_submission.save.assert_not_awaited()
     user.save.assert_not_awaited()
+
+
+def test_delete_submission_syncs_owner_stats(api_client, monkeypatch):
+    user = make_user()
+    delete_mock = AsyncMock()
+    sync_mock = AsyncMock(return_value=True)
+    app.dependency_overrides[get_current_user] = lambda: user
+
+    fake_submission = SimpleNamespace(
+        id="507f1f77bcf86cd799439011",
+        user_id=str(user.id),
+        status=SubmissionStatus.SUBMITTED,
+        submitted_at=utc_now(),
+        created_at=utc_now() - timedelta(days=1),
+        delete=delete_mock,
+    )
+
+    monkeypatch.setattr(submissions_api.Submission, "get", AsyncMock(return_value=fake_submission), raising=False)
+    monkeypatch.setattr(
+        submissions_api,
+        "get_admin_access_context",
+        AsyncMock(return_value=SimpleNamespace(has_any_scope=lambda *_args: False)),
+    )
+    monkeypatch.setattr(submissions_api, "sync_user_submission_stats_by_user_id", sync_mock, raising=False)
+
+    response = api_client.delete("/api/v1/submissions/507f1f77bcf86cd799439011")
+
+    assert response.status_code == 204
+    delete_mock.assert_awaited_once()
+    sync_mock.assert_awaited_once_with(str(user.id))
+
+
+def test_admin_delete_submission_syncs_submission_owner_stats(api_client, monkeypatch):
+    admin = make_user(role=UserRole.ADMIN)
+    delete_mock = AsyncMock()
+    sync_mock = AsyncMock(return_value=True)
+    app.dependency_overrides[get_current_user] = lambda: admin
+
+    fake_submission = SimpleNamespace(
+        id="507f1f77bcf86cd799439011",
+        user_id="owner-456",
+        status=SubmissionStatus.SUBMITTED,
+        submitted_at=utc_now(),
+        created_at=utc_now() - timedelta(days=1),
+        delete=delete_mock,
+    )
+
+    monkeypatch.setattr(submissions_api.Submission, "get", AsyncMock(return_value=fake_submission), raising=False)
+    monkeypatch.setattr(
+        submissions_api,
+        "get_admin_access_context",
+        AsyncMock(return_value=SimpleNamespace(has_any_scope=lambda *_args: True)),
+    )
+    monkeypatch.setattr(submissions_api, "sync_user_submission_stats_by_user_id", sync_mock, raising=False)
+
+    response = api_client.delete("/api/v1/submissions/507f1f77bcf86cd799439011")
+
+    assert response.status_code == 204
+    delete_mock.assert_awaited_once()
+    sync_mock.assert_awaited_once_with("owner-456")
 
 
 def test_get_settings_creates_default_when_missing(api_client, monkeypatch):

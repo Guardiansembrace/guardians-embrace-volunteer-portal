@@ -401,7 +401,7 @@ export default function AdminSubmissionsPage() {
                                         <tr>
                                             <th scope="col" style={{ padding: '1rem 1.5rem', color: '#64748b', fontWeight: 700, fontSize: '0.75rem', letterSpacing: '0.05em' }}>Volunteer</th>
                                             <th scope="col" style={{ padding: '1rem', color: '#64748b', fontWeight: 700, fontSize: '0.75rem', letterSpacing: '0.05em' }}>Week</th>
-                                            <th scope="col" style={{ padding: '1rem', color: '#64748b', fontWeight: 700, fontSize: '0.75rem', letterSpacing: '0.05em' }}>Hours</th>
+                                            <th scope="col" style={{ padding: '1rem', color: '#64748b', fontWeight: 700, fontSize: '0.75rem', letterSpacing: '0.05em' }}>Reported</th>
                                             <th scope="col" style={{ padding: '1rem', color: '#64748b', fontWeight: 700, fontSize: '0.75rem', letterSpacing: '0.05em' }}>Status</th>
                                             <th scope="col" style={{ padding: '1rem', color: '#64748b', fontWeight: 700, fontSize: '0.75rem', letterSpacing: '0.05em' }}>Blockers</th>
                                             <th scope="col" style={{ padding: '1rem', color: '#64748b', fontWeight: 700, fontSize: '0.75rem', letterSpacing: '0.05em' }}>Submitted</th>
@@ -415,7 +415,7 @@ export default function AdminSubmissionsPage() {
                                                     <span style={{ fontWeight: 700, color: '#0f172a' }}>{submission.user_name}</span>
                                                 </td>
                                                 <td style={{ padding: '1rem', color: '#475569', fontSize: '0.9rem' }}>{submission.week_id}</td>
-                                                <td style={{ padding: '1rem', color: '#475569', fontWeight: 600 }}>{submission.total_hours.toFixed(1)}h</td>
+                                                <td style={{ padding: '1rem', color: '#475569', fontWeight: 600 }}>{(submission.reported_hours ?? submission.total_hours).toFixed(1)}h</td>
                                                 <td style={{ padding: '1rem' }}>
                                                     <Badge variant={submission.status as 'draft' | 'submitted' | 'reviewed'}>
                                                         {submission.status.charAt(0).toUpperCase() + submission.status.slice(1)}
@@ -503,8 +503,9 @@ export default function AdminSubmissionsPage() {
                                         <p style={{ margin: '0.25rem 0 0', fontWeight: 800, fontSize: '1.1rem', color: '#0f172a' }}>{viewingSubmission.week_id}</p>
                                     </div>
                                     <div>
-                                        <p style={{ margin: 0, color: '#64748b', fontSize: '0.8rem', textTransform: 'uppercase', fontWeight: 700 }}>Hours</p>
-                                        <p style={{ margin: '0.25rem 0 0', fontWeight: 800, fontSize: '1.1rem', color: '#0f172a' }}>{viewingSubmission.total_hours}h</p>
+                                        <p style={{ margin: 0, color: '#64748b', fontSize: '0.8rem', textTransform: 'uppercase', fontWeight: 700 }}>Reported</p>
+                                        <p style={{ margin: '0.25rem 0 0', fontWeight: 800, fontSize: '1.1rem', color: '#0f172a' }}>{viewingSubmission.reported_hours ?? viewingSubmission.total_hours}h</p>
+                                        <p style={{ margin: '0.2rem 0 0', color: '#64748b', fontSize: '0.8rem', fontWeight: 600 }}>Credited {viewingSubmission.credited_hours ?? viewingSubmission.reported_hours ?? viewingSubmission.total_hours}h</p>
                                     </div>
                                     <div>
                                         <p style={{ margin: 0, color: '#64748b', fontSize: '0.8rem', textTransform: 'uppercase', fontWeight: 700 }}>Status</p>

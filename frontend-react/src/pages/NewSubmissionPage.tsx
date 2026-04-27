@@ -8,8 +8,8 @@ import FileUpload from '../components/FileUpload';
 import CommentSection from '../components/CommentSection';
 
 import { Navbar, Footer } from '../components/Layout';
-import { Card, CardHeader, CardTitle, Button, GuidancePanel, Input, Textarea, LoadingSpinner } from '../components/ui';
-import { ArrowLeft, Plus, Trash2, Save, Send, Link as LinkIcon, Clock, CheckCircle, Edit3, ExternalLink, Tag, Zap } from 'lucide-react';
+import { Card, CardHeader, CardTitle, Button, Input, Textarea, LoadingSpinner } from '../components/ui';
+import { ArrowLeft, Plus, Trash2, Save, Send, Link as LinkIcon, Clock, CheckCircle, Edit3, ExternalLink, Tag, Zap, ChevronDown } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 
 interface FormEntry {
@@ -45,7 +45,7 @@ const AUTOSAVE_DELAY_MS = 1200;
 const MAX_WEEKLY_HOURS = 168;
 
 const createEntry = (): FormEntry => ({
-    id: Math.random().toString(36).substr(2, 9),
+    id: Math.random().toString(36).slice(2, 11),
     description: '',
     hours: 0,
     drive_link: '',
@@ -53,7 +53,7 @@ const createEntry = (): FormEntry => ({
 });
 
 const workEntryToFormEntry = (entry: WorkEntry): FormEntry => ({
-    id: Math.random().toString(36).substr(2, 9),
+    id: Math.random().toString(36).slice(2, 11),
     description: entry.description,
     hours: entry.hours || 0,
     drive_link: entry.drive_link || '',
@@ -68,6 +68,19 @@ const parseHoursInput = (value: string): number => {
         return 0;
     }
     return Math.min(MAX_WEEKLY_HOURS, Math.max(0, parsed));
+};
+
+const getDescriptionAsHoursHint = (sectionLabel: string, entries: FormEntry[]): string | null => {
+    for (const entry of entries) {
+        const trimmed = entry.description.trim();
+        if (trimmed && entry.hours === 0) {
+            const parsed = Number.parseFloat(trimmed);
+            if (Number.isFinite(parsed) && parsed > 0 && String(parsed) === trimmed) {
+                return `"${trimmed}" in ${sectionLabel} looks like a number — did you mean to enter it as hours? Use the clock field (⏱) next to the description for hours.`;
+            }
+        }
+    }
+    return null;
 };
 
 const getEntryHoursValidationMessage = (sectionLabel: string, entries: FormEntry[]): string | null => {
@@ -86,11 +99,15 @@ const getEntryHoursValidationMessage = (sectionLabel: string, entries: FormEntry
     return null;
 };
 
+const sumEntryHours = (entries: FormEntry[]): number => (
+    entries.reduce((sum, entry) => sum + (entry.hours || 0), 0)
+);
+
 export default function NewSubmissionPage() {
     const navigate = useNavigate();
     const { id: submissionId } = useParams<{ id: string }>();
     const [searchParams] = useSearchParams();
-    const { user, isAuthenticated, isLoading: authLoading } = useAuth();
+    const { user, isAuthenticated, isLoading: authLoading, refreshUser } = useAuth();
     const requestedWeekId = searchParams.get('week')?.trim() || undefined;
 
     const [weekInfo, setWeekInfo] = useState<WeekInfo | null>(null);
@@ -133,6 +150,7 @@ export default function NewSubmissionPage() {
     const [assignedWorkItems, setAssignedWorkItems] = useState<ProjectWorkItem[]>([]);
     const [lastAutosavedAt, setLastAutosavedAt] = useState<number | null>(null);
     const [persistedSnapshot, setPersistedSnapshot] = useState<string | null>(null);
+    const [showTips, setShowTips] = useState(false);
 
     const autosaveScope = submissionId
         ? `submission:${submissionId}`
@@ -150,15 +168,17 @@ export default function NewSubmissionPage() {
     const canEditSubmission = canEdit && (!submission || submission.status !== 'reviewed');
     const selectedProject = projects.find((project) => project.id === selectedProjectId) || null;
 
-    // Fetch assigned work items whenever the project changes (edit mode only)
+    // Fetch all non-finished project board items whenever the project changes (edit mode only)
     useEffect(() => {
         if (!selectedProjectId || !isEditing) {
             setAssignedWorkItems([]);
             return;
         }
         let cancelled = false;
-        api.getMyAssignedWorkItems(selectedProjectId)
-            .then(items => { if (!cancelled) setAssignedWorkItems(items); })
+        api.getProjectWorkItems(selectedProjectId)
+            .then(items => {
+                if (!cancelled) setAssignedWorkItems(items.filter(i => i.status !== 'finished'));
+            })
             .catch(() => { if (!cancelled) setAssignedWorkItems([]); });
         return () => { cancelled = true; };
     }, [selectedProjectId, isEditing]);
@@ -286,9 +306,7 @@ export default function NewSubmissionPage() {
         api.getProjects()
             .then((allProjects) => {
                 const contributorProjects = allProjects.filter((project) => (
-                    user.role === 'admin'
-                    || user.role === 'team_lead'
-                    || project.lead?.id === user.id
+                    project.lead?.id === user.id
                     || project.members.some((member) => member.id === user.id)
                 ));
                 setProjects(contributorProjects);
@@ -485,18 +503,31 @@ export default function NewSubmissionPage() {
         persistedSnapshot,
     ]);
 
-    const calculateTotalHours = () => {
-        const past = pastWork.reduce((sum, e) => sum + (e.hours || 0), 0);
-        const present = presentWork.reduce((sum, e) => sum + (e.hours || 0), 0);
-        return past + present;
+    const calculateCreditedHours = () => sumEntryHours(pastWork);
+    const calculateReportedHours = () => {
+        const customReportedHours = Object.values(customResponses).reduce(
+            (sum, entries) => sum + sumEntryHours(entries),
+            0,
+        );
+        return sumEntryHours(pastWork) + sumEntryHours(presentWork) + customReportedHours;
     };
 
-    const draftTotalHours = quickMode ? (quickHours || 0) : calculateTotalHours();
-    const displayedTotalHours = isEditing
-        ? draftTotalHours
+    const draftReportedHours = quickMode ? (quickHours || 0) : calculateReportedHours();
+    const draftCreditedHours = quickMode ? (quickHours || 0) : calculateCreditedHours();
+    const displayedReportedHours = isEditing
+        ? draftReportedHours
         : submission
-            ? submission.total_hours
-            : draftTotalHours;
+            ? (submission.reported_hours ?? submission.total_hours)
+            : draftReportedHours;
+    const displayedCreditedHours = isEditing
+        ? draftCreditedHours
+        : submission
+            ? (submission.credited_hours ?? submission.reported_hours ?? submission.total_hours)
+            : draftCreditedHours;
+    const customSectionHoursValidationMessage = settings?.form_sections
+        .filter((section) => !['past', 'present', 'future'].includes(section.id) && section.showHours)
+        .map((section) => getEntryHoursValidationMessage(section.title, customResponses[section.id] || []))
+        .find((message): message is string => Boolean(message)) ?? null;
     const hoursValidationMessage = quickMode
         ? (
             !Number.isFinite(quickHours)
@@ -505,13 +536,28 @@ export default function NewSubmissionPage() {
                     ? 'Total hours cannot be negative.'
                     : quickHours > MAX_WEEKLY_HOURS
                         ? `Total weekly hours cannot exceed ${MAX_WEEKLY_HOURS}.`
+                        : quickHours > 0 && !quickSummary.trim()
+                            ? 'Add a short summary when logging hours in quick check-in mode.'
                         : null
         )
         : getEntryHoursValidationMessage('Past work', pastWork)
             ?? getEntryHoursValidationMessage('Present work', presentWork)
-            ?? (draftTotalHours > MAX_WEEKLY_HOURS
+            ?? customSectionHoursValidationMessage
+            ?? (draftReportedHours > MAX_WEEKLY_HOURS
                 ? `Total weekly hours cannot exceed ${MAX_WEEKLY_HOURS}.`
                 : null);
+
+    const descriptionAsHoursHint = !quickMode && settings
+        ? settings.form_sections
+            .filter((section) => section.id !== 'future' && section.showHours)
+            .map((section) => {
+                const entries = section.id === 'past' ? pastWork
+                    : section.id === 'present' ? presentWork
+                    : customResponses[section.id] || [];
+                return getDescriptionAsHoursHint(section.title, entries);
+            })
+            .find((hint): hint is string => Boolean(hint)) ?? null
+        : null;
 
     const handleEntryChange = (
         id: string,
@@ -641,6 +687,7 @@ export default function NewSubmissionPage() {
         setIsDeleting(true);
         try {
             await api.deleteSubmission(submissionId);
+            await refreshUser();
             navigate('/submissions');
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to delete submission.');
@@ -685,6 +732,7 @@ export default function NewSubmissionPage() {
             const result = await api.createOrUpdateSubmission(payload);
             setSubmission(result);
             syncWeekStateAfterSave(result);
+            await refreshUser();
             clearAutosave();
             setSaveSuccess(true);
             setTimeout(() => setSaveSuccess(false), 3000);
@@ -731,6 +779,7 @@ export default function NewSubmissionPage() {
                 };
             const sub = await api.createOrUpdateSubmission(payload);
             await api.submitSubmission(sub.id);
+            await refreshUser();
             clearAutosave();
             navigate('/dashboard');
         } catch (err) {
@@ -805,8 +854,16 @@ export default function NewSubmissionPage() {
     const progressPercent = completionSummary.total > 0
         ? Math.round((completionSummary.completed / completionSummary.total) * 100)
         : 0;
+    const sectionCompletions = !quickMode && settings
+        ? settings.form_sections.map((section, i) => ({
+            id: section.id,
+            icon: section.icon || '',
+            title: section.title,
+            done: hasFilledEntries(detailedSectionEntries[i] || []),
+        }))
+        : [];
     const submissionGuidelines = [
-        `You can report anywhere from 0 to ${MAX_WEEKLY_HOURS} hours for the week. If you had no hours, submit 0 with a short explanation in notes or blockers.`,
+        'Reported hours include Past Work, Present Work, and any timed custom sections. Credited hours only come from Past Work.',
         'Use the week picker to catch up on a recent missed week without leaving this form.',
         'Choose the project carefully because project members can view the full submission and its notes once it is saved or submitted.',
         'Use Quick check-in mode for a short summary and total hours. Use the detailed view when you want to break work into past, present, and future sections.',
@@ -821,157 +878,146 @@ export default function NewSubmissionPage() {
                 <div className="container" style={{ maxWidth: '900px' }}>
                     {/* Header */}
                     <div style={{ marginBottom: '2rem' }}>
-                        <Link to="/dashboard" className="flex items-center gap-2" style={{ color: 'var(--color-text-muted)', marginBottom: '1rem', fontSize: '0.875rem' }}>
+                        <Link to="/dashboard" className="flex items-center gap-2" style={{ color: 'var(--color-text-muted)', marginBottom: '1.25rem', fontSize: '0.875rem' }}>
                             <ArrowLeft size={16} /> Back to Dashboard
                         </Link>
 
-                        <div className="flex justify-between items-center">
+                        {/* Title row */}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
                             <div>
-                                <h1 style={{ marginBottom: '0.5rem' }}>
+                                <h1 style={{ marginBottom: '0.4rem' }}>
                                     {isEditing ? 'Weekly Update' : 'Submission Details'}
                                 </h1>
-                                <p style={{ color: 'var(--color-text-muted)', margin: 0 }}>
-                                    {displayWeekId} • {displayDateRange}
-                                </p>
-                            </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                                {/* Edit button — only in view mode, only if editable */}
-                                {!isEditing && canPersistSubmission && (
-                                    <Button variant="secondary" onClick={() => setIsEditing(true)}>
-                                        <Edit3 size={16} /> Edit
-                                    </Button>
-                                )}
-                                <div className="stat-card" style={{ padding: '1rem 1.5rem' }}>
-                                    <div className="stat-value" style={{ fontSize: '1.5rem' }}>
-                                        {`${displayedTotalHours.toFixed(1)}h`}
-                                    </div>
-                                    <div className="stat-label">Total Hours</div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                                    <span style={{ color: 'var(--color-text-muted)', fontSize: '0.95rem' }}>
+                                        {displayWeekId} • {displayDateRange}
+                                    </span>
+                                    {submission && (
+                                        <span style={{
+                                            padding: '0.15rem 0.6rem', borderRadius: '1rem',
+                                            fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em',
+                                            background: submission.status === 'submitted' ? '#dbeafe' : submission.status === 'reviewed' ? '#dcfce7' : '#f3f4f6',
+                                            color: submission.status === 'submitted' ? '#1d4ed8' : submission.status === 'reviewed' ? '#15803d' : '#6b7280',
+                                        }}>
+                                            {submission.status}
+                                        </span>
+                                    )}
+                                    {!canEditSubmission && submission?.status === 'reviewed' && (
+                                        <span style={{ fontSize: '0.78rem', color: 'var(--color-text-muted)' }}>
+                                            Reviewed — view only
+                                        </span>
+                                    )}
                                 </div>
                             </div>
+                            {!isEditing && canPersistSubmission && (
+                                <Button variant="secondary" onClick={() => setIsEditing(true)}>
+                                    <Edit3 size={16} /> Edit
+                                </Button>
+                            )}
                         </div>
 
-                        {/* Status badge for existing submissions */}
-                        {submission && (
-                            <div style={{ marginTop: '0.75rem' }}>
-                                <span style={{
-                                    display: 'inline-block',
-                                    padding: '0.25rem 0.75rem',
-                                    borderRadius: '1rem',
-                                    fontSize: '0.75rem',
-                                    fontWeight: 600,
-                                    textTransform: 'uppercase',
-                                    background: submission.status === 'submitted' ? '#dbeafe' :
-                                        submission.status === 'reviewed' ? '#dcfce7' : '#f3f4f6',
-                                    color: submission.status === 'submitted' ? '#1d4ed8' :
-                                        submission.status === 'reviewed' ? '#15803d' : '#6b7280',
-                                }}>
-                                    {submission.status}
+                        {/* Hours bar */}
+                        <div style={{
+                            display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.7rem 1.1rem',
+                            background: 'var(--color-bg-secondary)', borderRadius: 'var(--radius-md)',
+                            border: '1px solid var(--color-border)', marginBottom: '1rem', flexWrap: 'wrap',
+                        }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                <Clock size={15} style={{ color: 'var(--color-primary-gold, #b45309)', flexShrink: 0 }} />
+                                <span style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--color-text-primary)', lineHeight: 1 }}>
+                                    {displayedReportedHours.toFixed(1)}h
                                 </span>
-                                {!canEditSubmission && submission.status === 'reviewed' && (
-                                    <span style={{ marginLeft: '0.75rem', fontSize: '0.8rem', color: 'var(--color-text-muted)' }}>
-                                        This submission has been reviewed and cannot be edited.
-                                    </span>
-                                )}
+                                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                    Reported
+                                </span>
                             </div>
-                        )}
-                        {isEditing && (
-                            <p
-                                style={{
-                                    margin: '0.75rem 0 0',
-                                    fontSize: '0.8rem',
-                                    color: hoursValidationMessage ? 'var(--color-error)' : 'var(--color-text-muted)',
-                                }}
-                            >
-                                {hoursValidationMessage || `Enter a total between 0 and ${MAX_WEEKLY_HOURS}. Zero-hour check-ins are okay when you add context.`}
-                            </p>
-                        )}
-
-                        {selectableWeeks.length > 0 && (
-                            <div
-                                style={{
-                                    marginTop: '1.25rem',
-                                    padding: '1rem 1.25rem',
-                                    background: 'white',
-                                    border: '1px solid var(--color-border)',
-                                    borderRadius: 'var(--radius-md)',
-                                    boxShadow: 'var(--shadow-sm, 0 8px 24px rgba(15, 23, 42, 0.06))',
-                                }}
-                            >
-                                <div className="flex justify-between items-center" style={{ gap: '1rem', flexWrap: 'wrap' }}>
-                                    <div style={{ flex: '1 1 260px' }}>
-                                        <p style={{ margin: 0, fontSize: '0.78rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-text-muted)' }}>
-                                            Submission Week
-                                        </p>
-                                        <p style={{ margin: '0.35rem 0 0', fontSize: '0.92rem', color: 'var(--color-text-secondary)' }}>
-                                            {selectedWeekOption
-                                                ? describeSelectableWeek(selectedWeekOption)
-                                                : 'Choose the week you want to update or backfill.'}
-                                        </p>
-                                    </div>
-                                    <div style={{ minWidth: '280px', flex: '0 1 320px' }}>
-                                        <label htmlFor="submission-week-select" style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, color: 'var(--color-text-secondary)', marginBottom: '0.45rem' }}>
-                                            Week
-                                        </label>
-                                        <select
-                                            id="submission-week-select"
-                                            className="form-select"
-                                            value={displayWeekId}
-                                            onChange={(event) => handleWeekSelectionChange(event.target.value)}
-                                            disabled={isSubmitting}
-                                            style={{ width: '100%', background: 'white' }}
-                                        >
-                                            {selectableWeeks.map((week) => (
-                                                <option key={week.week_id} value={week.week_id}>
-                                                    {formatSelectableWeekLabel(week)}
-                                                </option>
-                                            ))}
-                                        </select>
-                                    </div>
-                                </div>
+                            <span style={{ color: 'var(--color-border)', fontSize: '1.1rem', lineHeight: 1 }}>|</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                <span style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--color-text-secondary)', lineHeight: 1 }}>
+                                    {displayedCreditedHours.toFixed(1)}h
+                                </span>
+                                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                    Credited
+                                </span>
                             </div>
-                        )}
+                            {isEditing && hoursValidationMessage && (
+                                <span style={{ marginLeft: 'auto', fontSize: '0.78rem', fontWeight: 600, color: 'var(--color-error)', background: 'var(--color-error-bg)', padding: '0.2rem 0.55rem', borderRadius: '0.25rem' }}>
+                                    {hoursValidationMessage}
+                                </span>
+                            )}
+                            {isEditing && !hoursValidationMessage && descriptionAsHoursHint && (
+                                <span style={{ marginLeft: 'auto', fontSize: '0.78rem', fontWeight: 600, color: '#b45309', background: '#fef3c7', border: '1px solid #fde68a', padding: '0.2rem 0.55rem', borderRadius: '0.25rem' }}>
+                                    {descriptionAsHoursHint}
+                                </span>
+                            )}
+                            {isEditing && !hoursValidationMessage && !descriptionAsHoursHint && (
+                                <span style={{ marginLeft: 'auto', fontSize: '0.7rem', color: 'var(--color-text-muted)' }}>
+                                    Past + Present = Reported · Past only = Credited
+                                </span>
+                            )}
+                        </div>
 
-                        <div
-                            style={{
-                                marginTop: '1.25rem',
-                                padding: '1rem 1.25rem',
-                                background: 'white',
-                                border: '1px solid var(--color-border)',
-                                borderRadius: 'var(--radius-md)',
-                                boxShadow: 'var(--shadow-sm, 0 8px 24px rgba(15, 23, 42, 0.06))',
-                            }}
-                        >
-                            <div className="flex justify-between items-center" style={{ gap: '1rem', flexWrap: 'wrap' }}>
-                                <div style={{ flex: '1 1 260px' }}>
-                                    <p style={{ margin: 0, fontSize: '0.78rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-text-muted)' }}>
-                                        Project
-                                    </p>
-                                    <p style={{ margin: '0.35rem 0 0', fontSize: '0.92rem', color: 'var(--color-text-secondary)' }}>
-                                        {selectedProject
-                                            ? `This update will be visible to all members of ${selectedProject.name}.`
-                                            : 'Choose the project this weekly update belongs to before saving or submitting.'}
-                                    </p>
-                                </div>
-                                <div style={{ minWidth: '280px', flex: '0 1 320px' }}>
-                                    <label htmlFor="submission-project-select" style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, color: 'var(--color-text-secondary)', marginBottom: '0.45rem' }}>
-                                        Project
+                        {/* Setup: Week + Project combined */}
+                        <div style={{
+                            display: 'grid',
+                            gridTemplateColumns: selectableWeeks.length > 0 ? 'repeat(2, 1fr)' : '1fr',
+                            gap: '1rem',
+                            padding: '1rem 1.1rem',
+                            background: 'white',
+                            border: '1px solid var(--color-border)',
+                            borderRadius: 'var(--radius-md)',
+                            boxShadow: 'var(--shadow-sm, 0 2px 8px rgba(15,23,42,0.05))',
+                        }}>
+                            {selectableWeeks.length > 0 && (
+                                <div>
+                                    <label htmlFor="submission-week-select" style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.4rem' }}>
+                                        Week
                                     </label>
                                     <select
-                                        id="submission-project-select"
+                                        id="submission-week-select"
                                         className="form-select"
-                                        value={selectedProjectId}
-                                        onChange={(event) => setSelectedProjectId(event.target.value)}
-                                        disabled={isSubmitting || Boolean(submissionId)}
-                                        style={{ width: '100%', background: 'white' }}
+                                        value={displayWeekId}
+                                        onChange={(event) => handleWeekSelectionChange(event.target.value)}
+                                        disabled={isSubmitting}
+                                        style={{ width: '100%', background: 'white', marginBottom: '0.3rem' }}
                                     >
-                                        <option value="">Select a project</option>
-                                        {projects.map((project) => (
-                                            <option key={project.id} value={project.id}>
-                                                {project.name}
+                                        {selectableWeeks.map((week) => (
+                                            <option key={week.week_id} value={week.week_id}>
+                                                {formatSelectableWeekLabel(week)}
                                             </option>
                                         ))}
                                     </select>
+                                    {selectedWeekOption && (
+                                        <p style={{ margin: 0, fontSize: '0.76rem', color: 'var(--color-text-muted)' }}>
+                                            {describeSelectableWeek(selectedWeekOption)}
+                                        </p>
+                                    )}
                                 </div>
+                            )}
+                            <div>
+                                <label htmlFor="submission-project-select" style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.4rem' }}>
+                                    Project
+                                </label>
+                                <select
+                                    id="submission-project-select"
+                                    className="form-select"
+                                    value={selectedProjectId}
+                                    onChange={(event) => setSelectedProjectId(event.target.value)}
+                                    disabled={isSubmitting || Boolean(submissionId)}
+                                    style={{ width: '100%', background: 'white', marginBottom: '0.3rem' }}
+                                >
+                                    <option value="">Select a project</option>
+                                    {projects.map((project) => (
+                                        <option key={project.id} value={project.id}>
+                                            {project.name}
+                                        </option>
+                                    ))}
+                                </select>
+                                <p style={{ margin: 0, fontSize: '0.76rem', color: 'var(--color-text-muted)' }}>
+                                    {selectedProject
+                                        ? `Visible to ${selectedProject.name} members.`
+                                        : 'Choose the project this update belongs to.'}
+                                </p>
                             </div>
                         </div>
                     </div>
@@ -1008,14 +1054,33 @@ export default function NewSubmissionPage() {
                     )}
 
                     {/* ── Carry-Forward Goals Banner ──────────────── */}
-                    <GuidancePanel
-                        title="Weekly Update Tips"
-                        description="These short rules help volunteers fill out updates consistently and help reviewers scan them faster."
-                        items={submissionGuidelines}
-                        icon={<Zap size={18} />}
-                        tone="gold"
-                        style={{ marginBottom: '1.5rem' }}
-                    />
+                    {/* Collapsible tips */}
+                    <div style={{ marginBottom: '1.5rem', border: '1px solid #fde68a', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+                        <button
+                            type="button"
+                            onClick={() => setShowTips(!showTips)}
+                            style={{
+                                width: '100%', padding: '0.6rem 1rem', border: 'none', cursor: 'pointer',
+                                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                                background: showTips ? '#fef3c7' : 'white',
+                                fontWeight: 600, fontSize: '0.85rem', color: 'var(--color-text-secondary)',
+                                transition: 'background 0.15s',
+                            }}
+                        >
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                <Zap size={14} style={{ color: 'var(--color-primary-gold, #b45309)' }} />
+                                Weekly Update Tips
+                            </span>
+                            <ChevronDown size={15} style={{ transform: showTips ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s', color: 'var(--color-text-muted)', flexShrink: 0 }} />
+                        </button>
+                        {showTips && (
+                            <ul style={{ margin: 0, padding: '0.75rem 1rem 0.75rem 2rem', background: '#fffdf7', borderTop: '1px solid #fde68a', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                                {submissionGuidelines.map((tip, i) => (
+                                    <li key={i} style={{ fontSize: '0.82rem', color: 'var(--color-text-secondary)', lineHeight: 1.5 }}>{tip}</li>
+                                ))}
+                            </ul>
+                        )}
+                    </div>
 
                     {pendingRecovery && (
                         <div
@@ -1048,55 +1113,53 @@ export default function NewSubmissionPage() {
                     )}
 
                     {isEditing && !pendingRecovery && (
-                        <Card style={{ marginBottom: '1.25rem', background: 'linear-gradient(180deg, #fffdf7 0%, #ffffff 100%)', border: '1px solid rgba(219, 169, 40, 0.2)' }}>
-                            <div className="flex justify-between items-center" style={{ gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
-                                <div>
-                                    <p style={{ margin: 0, fontSize: '0.78rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-text-muted)' }}>
-                                        Submission progress
-                                    </p>
-                                    <h3 style={{ margin: '0.35rem 0 0', fontSize: '1.1rem' }}>
-                                        {completionSummary.completed} of {completionSummary.total} sections completed
-                                    </h3>
+                        <Card style={{ marginBottom: '1.25rem', background: 'linear-gradient(180deg, #fffdf7 0%, #ffffff 100%)', border: '1px solid rgba(219,169,40,0.2)' }}>
+                            <div style={{ padding: '0.85rem 1.25rem' }}>
+                                <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', marginBottom: '0.65rem' }}>
+                                    {sectionCompletions.map(s => (
+                                        <span key={s.id} style={{
+                                            fontSize: '0.7rem', fontWeight: 700, padding: '0.2rem 0.5rem',
+                                            borderRadius: '1rem', display: 'flex', alignItems: 'center', gap: '0.25rem',
+                                            background: s.done ? '#dcfce7' : 'var(--color-bg-secondary)',
+                                            color: s.done ? '#15803d' : 'var(--color-text-muted)',
+                                            border: `1px solid ${s.done ? '#bbf7d0' : 'var(--color-border)'}`,
+                                        }}>
+                                            {s.icon} {s.title} {s.done ? '✓' : ''}
+                                        </span>
+                                    ))}
+                                    <span style={{
+                                        fontSize: '0.7rem', fontWeight: 700, padding: '0.2rem 0.5rem', borderRadius: '1rem',
+                                        display: 'flex', alignItems: 'center', gap: '0.25rem',
+                                        background: (blockers.trim() || notes.trim()) ? '#dcfce7' : 'var(--color-bg-secondary)',
+                                        color: (blockers.trim() || notes.trim()) ? '#15803d' : 'var(--color-text-muted)',
+                                        border: `1px solid ${(blockers.trim() || notes.trim()) ? '#bbf7d0' : 'var(--color-border)'}`,
+                                    }}>
+                                        📝 Notes {(blockers.trim() || notes.trim()) ? '✓' : ''}
+                                    </span>
+                                    <span style={{
+                                        fontSize: '0.7rem', fontWeight: 700, padding: '0.2rem 0.5rem', borderRadius: '1rem',
+                                        display: 'flex', alignItems: 'center', gap: '0.25rem',
+                                        background: moodRating !== null ? '#dcfce7' : 'var(--color-bg-secondary)',
+                                        color: moodRating !== null ? '#15803d' : 'var(--color-text-muted)',
+                                        border: `1px solid ${moodRating !== null ? '#bbf7d0' : 'var(--color-border)'}`,
+                                    }}>
+                                        😊 Mood {moodRating !== null ? '✓' : ''}
+                                    </span>
                                 </div>
-                                <div style={{ minWidth: '240px', flex: '1 1 260px' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', color: 'var(--color-text-secondary)', marginBottom: '0.45rem' }}>
-                                        <span>{quickMode ? 'Quick check-in mode' : 'Detailed weekly update'}</span>
-                                        <strong>{progressPercent}%</strong>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                    <div style={{ flex: 1, height: '0.4rem', borderRadius: '999px', background: 'var(--color-bg-secondary)', overflow: 'hidden' }}>
+                                        <div style={{ width: `${progressPercent}%`, height: '100%', background: 'var(--gradient-gold)', borderRadius: '999px', transition: 'width 0.4s ease' }} />
                                     </div>
-                                    <div style={{ height: '0.55rem', borderRadius: '999px', background: 'var(--color-bg-secondary)', overflow: 'hidden' }}>
-                                        <div style={{ width: `${progressPercent}%`, height: '100%', background: 'var(--gradient-gold)', borderRadius: '999px' }} />
-                                    </div>
+                                    <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--color-text-muted)', whiteSpace: 'nowrap' }}>{progressPercent}%</span>
+                                    <span style={{ fontSize: '0.72rem', color: 'var(--color-text-muted)', whiteSpace: 'nowrap' }}>
+                                        {lastAutosavedAt ? `Autosaved ${format(new Date(lastAutosavedAt), 'h:mm a')}` : 'Autosave pending'}
+                                    </span>
+                                    {lastAutosavedAt && (
+                                        <button type="button" onClick={clearAutosave} style={{ border: 'none', background: 'none', color: 'var(--color-text-muted)', fontSize: '0.72rem', cursor: 'pointer', padding: 0, whiteSpace: 'nowrap' }}>
+                                            · Clear
+                                        </button>
+                                    )}
                                 </div>
-                            </div>
-
-                            <div className="flex justify-between items-center" style={{ gap: '1rem', flexWrap: 'wrap' }}>
-                                <div>
-                                    <p style={{ margin: 0, fontSize: '0.9rem', color: 'var(--color-text-secondary)' }}>
-                                        {lastAutosavedAt
-                                            ? `Autosaved locally at ${format(new Date(lastAutosavedAt), 'h:mm a')}.`
-                                            : 'Autosave will start once you add work details.'}
-                                    </p>
-                                    <p style={{ margin: '0.25rem 0 0', fontSize: '0.85rem', color: 'var(--color-text-muted)' }}>
-                                        Save a draft anytime. You can come back later before submitting for review.
-                                    </p>
-                                </div>
-                                {lastAutosavedAt && (
-                                    <button
-                                        type="button"
-                                        onClick={clearAutosave}
-                                        style={{
-                                            border: 'none',
-                                            background: 'transparent',
-                                            color: 'var(--color-text-secondary)',
-                                            fontSize: '0.85rem',
-                                            fontWeight: 600,
-                                            cursor: 'pointer',
-                                            padding: 0,
-                                        }}
-                                    >
-                                        Clear local draft
-                                    </button>
-                                )}
                             </div>
                         </Card>
                     )}
@@ -1121,7 +1184,7 @@ export default function NewSubmissionPage() {
                                 <div className="flex gap-2">
                                     <Button variant="primary" size="sm" onClick={() => {
                                         const carried = lastWeekGoals.goals.map(g => ({
-                                            id: Math.random().toString(36).substr(2, 9),
+                                            id: Math.random().toString(36).slice(2, 11),
                                             description: g.description,
                                             hours: 0,
                                             drive_link: g.drive_link || '',
@@ -1144,12 +1207,17 @@ export default function NewSubmissionPage() {
                     )}
 
                     {/* ── Assigned Work Item Suggestions ───────────── */}
-                    {isEditing && !quickMode && assignedWorkItems.length > 0 && (() => {
+                    {isEditing && !quickMode && selectedProjectId && (() => {
                         const usedIds = new Set(
                             [...pastWork, ...presentWork, ...futureWork]
                                 .map(e => e.work_item_id)
                                 .filter(Boolean) as string[]
                         );
+                        const statusColors: Record<string, { dot: string }> = {
+                            pending: { dot: '#94a3b8' },
+                            active:  { dot: '#059669' },
+                            blocked: { dot: '#ea580c' },
+                        };
                         return (
                             <div style={{
                                 marginBottom: '1.5rem',
@@ -1159,61 +1227,61 @@ export default function NewSubmissionPage() {
                                 borderRadius: 'var(--radius-md)',
                             }}>
                                 <p style={{ margin: '0 0 0.75rem 0', fontSize: '0.8rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                                    📋 Your assigned board items — click to add
+                                    📋 Board items — click to add to Past Work
                                 </p>
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-                                    {assignedWorkItems.map(item => {
-                                        const alreadyAdded = usedIds.has(item.id);
-                                        const statusColors: Record<string, { bg: string; text: string }> = {
-                                            pending: { bg: '#f1f5f9', text: '#64748b' },
-                                            active:  { bg: '#ecfdf5', text: '#059669' },
-                                            blocked: { bg: '#fff7ed', text: '#ea580c' },
-                                            finished: { bg: '#f0fdf4', text: '#16a34a' },
-                                        };
-                                        const sc = statusColors[item.status] ?? statusColors.pending;
-                                        return (
-                                            <button
-                                                key={item.id}
-                                                type="button"
-                                                disabled={alreadyAdded}
-                                                onClick={() => {
-                                                    const newEntry: FormEntry = {
-                                                        id: Math.random().toString(36).substr(2, 9),
-                                                        description: item.title,
-                                                        hours: 0,
-                                                        drive_link: '',
-                                                        tags: [],
-                                                        work_item_id: item.id,
-                                                        work_item_status_update: 'finished',
-                                                    };
-                                                    setPastWork(prev => {
-                                                        const hasContent = prev.some(e => e.description.trim());
-                                                        return hasContent ? [...prev, newEntry] : [newEntry];
-                                                    });
-                                                }}
-                                                style={{
-                                                    display: 'inline-flex',
-                                                    alignItems: 'center',
-                                                    gap: '0.4rem',
-                                                    padding: '0.35rem 0.75rem',
-                                                    borderRadius: '999px',
-                                                    border: `1px solid ${alreadyAdded ? '#e2e8f0' : '#cbd5e1'}`,
-                                                    background: alreadyAdded ? '#f8fafc' : 'white',
-                                                    color: alreadyAdded ? '#94a3b8' : '#1e293b',
-                                                    fontSize: '0.8rem',
-                                                    fontWeight: 600,
-                                                    cursor: alreadyAdded ? 'default' : 'pointer',
-                                                    opacity: alreadyAdded ? 0.55 : 1,
-                                                    transition: 'all 0.15s',
-                                                }}
-                                            >
-                                                <span style={{ width: 7, height: 7, borderRadius: '50%', background: sc.text, flexShrink: 0 }} />
-                                                {item.title}
-                                                {alreadyAdded && <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>✓</span>}
-                                            </button>
-                                        );
-                                    })}
-                                </div>
+                                {assignedWorkItems.length === 0 ? (
+                                    <p style={{ margin: 0, fontSize: '0.82rem', color: '#94a3b8' }}>
+                                        No open board items in this project yet.
+                                    </p>
+                                ) : (
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                        {assignedWorkItems.map(item => {
+                                            const alreadyAdded = usedIds.has(item.id);
+                                            const dot = (statusColors[item.status] ?? statusColors.pending).dot;
+                                            return (
+                                                <button
+                                                    key={item.id}
+                                                    type="button"
+                                                    disabled={alreadyAdded}
+                                                    onClick={() => {
+                                                        const newEntry: FormEntry = {
+                                                            id: Math.random().toString(36).slice(2, 11),
+                                                            description: item.title,
+                                                            hours: 0,
+                                                            drive_link: '',
+                                                            tags: [],
+                                                            work_item_id: item.id,
+                                                            work_item_status_update: 'finished',
+                                                        };
+                                                        setPastWork(prev => {
+                                                            const hasContent = prev.some(e => e.description.trim());
+                                                            return hasContent ? [...prev, newEntry] : [newEntry];
+                                                        });
+                                                    }}
+                                                    style={{
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        gap: '0.4rem',
+                                                        padding: '0.35rem 0.75rem',
+                                                        borderRadius: '999px',
+                                                        border: `1px solid ${alreadyAdded ? '#e2e8f0' : '#cbd5e1'}`,
+                                                        background: alreadyAdded ? '#f8fafc' : 'white',
+                                                        color: alreadyAdded ? '#94a3b8' : '#1e293b',
+                                                        fontSize: '0.8rem',
+                                                        fontWeight: 600,
+                                                        cursor: alreadyAdded ? 'default' : 'pointer',
+                                                        opacity: alreadyAdded ? 0.55 : 1,
+                                                        transition: 'all 0.15s',
+                                                    }}
+                                                >
+                                                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: dot, flexShrink: 0 }} />
+                                                    {item.title}
+                                                    {alreadyAdded && <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>✓</span>}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                )}
                             </div>
                         );
                     })()}
@@ -1334,20 +1402,41 @@ export default function NewSubmissionPage() {
                                     }));
                                 }
 
+                                const sectionShowsHours = section.id !== 'future' && section.showHours;
+                                const sectionHours = sectionShowsHours ? sumEntryHours(stateProps) : null;
+
                                 return (
                                     <Card key={section.id} style={{ border: '1px solid var(--color-border)', boxShadow: 'var(--shadow-md)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
                                         <div style={{ background: 'var(--color-bg-secondary)', padding: '1rem 1.5rem', borderBottom: '1px solid var(--color-border)', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                                             <span style={{ fontSize: '1.25rem' }}>{section.icon}</span>
-                                            <div>
+                                            <div style={{ flex: 1 }}>
                                                 <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 800, color: 'var(--color-text-primary)' }}>{section.title}</h3>
                                                 <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--color-text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{section.subtitle}</p>
                                             </div>
+                                            {sectionHours !== null && (
+                                                <span style={{
+                                                    fontSize: '0.85rem',
+                                                    fontWeight: 700,
+                                                    color: sectionHours > 0 ? 'var(--color-primary-gold, #b45309)' : 'var(--color-text-muted)',
+                                                    background: sectionHours > 0 ? 'var(--color-primary-gold-light, #fef3c7)' : 'var(--color-border)',
+                                                    border: `1px solid ${sectionHours > 0 ? '#fde68a' : 'var(--color-border)'}`,
+                                                    borderRadius: '1rem',
+                                                    padding: '0.2rem 0.65rem',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    gap: '0.3rem',
+                                                    whiteSpace: 'nowrap',
+                                                }}>
+                                                    <Clock size={13} />
+                                                    {sectionHours > 0 ? `${sectionHours}h` : 'No hours yet'}
+                                                </span>
+                                            )}
                                         </div>
                                         <div style={{ padding: '1.5rem' }}>
                                             {isEditing ? (
-                                                <WorkEntryList entries={stateProps} setEntries={setProps} showHours={section.showHours} onChange={handleEntryChange} categories={categories} />
+                                                <WorkEntryList entries={stateProps} setEntries={setProps} showHours={section.id !== 'future' && section.showHours} onChange={handleEntryChange} categories={categories} />
                                             ) : (
-                                                <ReadOnlyEntries entries={stateProps} showHours={section.showHours} />
+                                                <ReadOnlyEntries entries={stateProps} showHours={section.id !== 'future' && section.showHours} />
                                             )}
                                         </div>
                                     </Card>
@@ -1492,7 +1581,7 @@ export default function NewSubmissionPage() {
 
                     {/* ── Action Buttons ─────────────────────────── */}
                     {isEditing && (
-                        <div style={{ padding: '1.5rem', background: 'white', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-md)' }}>
+                        <div style={{ position: 'sticky', bottom: '1rem', zIndex: 20, padding: '1rem 1.5rem', background: 'white', borderRadius: 'var(--radius-lg)', boxShadow: '0 -2px 12px rgba(0,0,0,0.07), var(--shadow-md)', border: '1px solid var(--color-border)' }}>
                             <div className="flex justify-between items-center" style={{ gap: '1rem', flexWrap: 'wrap' }}>
                                 <div>
                                     <p style={{ margin: 0, fontWeight: 700, fontSize: '0.95rem' }}>Ready when you are</p>
@@ -1644,17 +1733,22 @@ function ReadOnlyEntries({ entries, showHours }: { entries: FormEntry[]; showHou
                             </a>
                         )}
                     </div>
-                    {showHours && entry.hours > 0 && (
+                    {showHours && (
                         <span style={{
                             fontSize: '0.8rem',
-                            fontWeight: 600,
-                            color: 'var(--color-text-secondary)',
+                            fontWeight: 700,
+                            color: entry.hours > 0 ? 'var(--color-primary-gold, #b45309)' : 'var(--color-text-muted)',
+                            background: entry.hours > 0 ? 'var(--color-primary-gold-light, #fef3c7)' : 'var(--color-bg-secondary)',
+                            border: `1px solid ${entry.hours > 0 ? '#fde68a' : 'var(--color-border)'}`,
+                            borderRadius: '1rem',
+                            padding: '0.15rem 0.5rem',
                             whiteSpace: 'nowrap',
                             display: 'flex',
                             alignItems: 'center',
                             gap: '0.25rem',
+                            flexShrink: 0,
                         }}>
-                            <Clock size={14} /> {entry.hours}h
+                            <Clock size={13} /> {entry.hours > 0 ? `${entry.hours}h` : '0h'}
                         </span>
                     )}
                 </div>
@@ -1688,6 +1782,19 @@ function WorkEntryList({
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            {showHours && (
+                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', paddingBottom: '0.25rem' }}>
+                    <div style={{ flex: '1 1 250px' }}>
+                        <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Description</span>
+                    </div>
+                    <div style={{ width: '100px', flexShrink: 0 }}>
+                        <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--color-primary-gold, #b45309)', textTransform: 'uppercase', letterSpacing: '0.06em', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                            <Clock size={11} /> Hours
+                        </span>
+                    </div>
+                    {entries.length > 1 && <div style={{ width: '34px', flexShrink: 0 }} />}
+                </div>
+            )}
             {entries.map((entry, index) => (
                 <div key={entry.id} style={{ paddingBottom: index < entries.length - 1 ? '1.25rem' : '0', borderBottom: index < entries.length - 1 ? '1px solid var(--color-border)' : 'none' }}>
                     <div className="flex items-start" style={{ gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
@@ -1701,17 +1808,23 @@ function WorkEntryList({
                         {showHours && (
                             <div style={{ width: '100px', flexShrink: 0 }}>
                                 <div style={{ position: 'relative' }}>
-                                    <Clock size={16} style={{ position: 'absolute', left: '0.65rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-muted)' }} />
+                                    <Clock size={16} style={{ position: 'absolute', left: '0.65rem', top: '50%', transform: 'translateY(-50%)', color: entry.hours > 0 ? 'var(--color-primary-gold, #b45309)' : 'var(--color-text-muted)' }} />
                                     <input
                                         type="number"
                                         min="0"
                                         max={MAX_WEEKLY_HOURS}
                                         step="0.5"
-                                        placeholder="Hours"
+                                        placeholder="0"
                                         value={entry.hours || ''}
                                         onChange={(e) => onChange(entry.id, 'hours', parseHoursInput(e.target.value), setEntries)}
                                         className="form-input"
-                                        style={{ padding: '0.5rem 0.5rem 0.5rem 2.25rem', fontWeight: 600, width: '100%' }}
+                                        style={{
+                                            padding: '0.5rem 0.5rem 0.5rem 2.25rem',
+                                            fontWeight: 700,
+                                            width: '100%',
+                                            borderColor: entry.hours > 0 ? 'var(--color-primary-gold, #b45309)' : undefined,
+                                            background: entry.hours > 0 ? 'var(--color-primary-gold-light, #fef3c7)' : undefined,
+                                        }}
                                     />
                                 </div>
                             </div>
@@ -1800,4 +1913,3 @@ function WorkEntryList({
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
-
