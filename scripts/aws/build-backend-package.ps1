@@ -38,6 +38,12 @@ Write-Info 'Copying backend application code into the Lambda staging directory'
 Copy-Item -Recurse -Force (Join-Path $repoRoot 'backend\app') (Join-Path $stageDir 'app')
 Copy-Item -Recurse -Force (Join-Path $repoRoot 'shared') (Join-Path $stageDir 'shared')
 
+$serviceAccountPath = Join-Path $repoRoot 'backend\service-account.json'
+if (Test-Path $serviceAccountPath) {
+    Write-Info 'Copying Google Drive service account credentials into the Lambda staging directory'
+    Copy-Item -Force $serviceAccountPath (Join-Path $stageDir 'service-account.json')
+}
+
 Write-Info 'Creating backend Lambda zip artifact'
 Compress-Archive -Path (Join-Path $stageDir '*') -DestinationPath $zipPath -Force
 

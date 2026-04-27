@@ -79,6 +79,16 @@ async def _get_project_or_404(project_id: str, *, fetch_links: bool = False) -> 
     return project
 
 
+async def _delete_project_with_related_records(project: Project) -> None:
+    """Delete a project along with its work items and requests."""
+    from app.models.project_work_item import ProjectWorkItem
+    from app.models.project_join_request import ProjectJoinRequest
+
+    await ProjectWorkItem.find(ProjectWorkItem.project_id == project.id).delete()
+    await ProjectJoinRequest.find(ProjectJoinRequest.project_id == project.id).delete()
+    await project.delete()
+
+
 @router.get("", response_model=List[ProjectResponse])
 async def get_projects(
     status: Optional[str] = None,
@@ -107,25 +117,47 @@ async def get_projects(
 )
 async def create_project(
     project_in: ProjectCreate,
-    current_admin: User = Depends(get_current_operations)
+    current_user: User = Depends(get_current_user)
 ):
     """
-    Create a new project (operations or admin).
+    Create a new project.
     """
+    has_project_management_access = await _has_project_management_access(current_user)
     project_data = project_in.model_dump(exclude={"lead_id", "member_ids"})
     project_data["tags"] = normalize_project_tags(project_data.get("tags"))
     project = Project(**project_data)
-    
-    if project_in.lead_id:
-        leader = await _get_assignable_user_or_404(project_in.lead_id, detail="Leader user not found")
-        project.lead = leader
-        
-    if project_in.member_ids:
-        members = []
-        for uid in project_in.member_ids:
-            members.append(await _get_assignable_user_or_404(uid, detail="Member user not found"))
-        project.members = members
-        
+
+    if has_project_management_access:
+        if project_in.lead_id:
+            leader = await _get_assignable_user_or_404(project_in.lead_id, detail="Leader user not found")
+            project.lead = leader
+
+        if project_in.member_ids:
+            members = []
+            for uid in project_in.member_ids:
+                members.append(await _get_assignable_user_or_404(uid, detail="Member user not found"))
+            project.members = members
+    else:
+        creator_id = str(current_user.id)
+        requested_lead_id = str(project_in.lead_id) if project_in.lead_id else None
+        requested_member_ids = [str(uid) for uid in (project_in.member_ids or []) if uid]
+
+        if requested_lead_id and requested_lead_id != creator_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Volunteers can only assign themselves as project lead when creating a project",
+            )
+
+        disallowed_member_ids = [member_id for member_id in requested_member_ids if member_id != creator_id]
+        if disallowed_member_ids:
+            raise HTTPException(
+                status_code=403,
+                detail="Volunteers can only add themselves when creating a project",
+            )
+
+        project.lead = current_user
+        project.members = [current_user]
+
     await project.create()
     created_project = await Project.get(project.id, fetch_links=True)
     return _serialize_project(created_project)
@@ -258,12 +290,7 @@ async def delete_project(
     """
     Delete a project (operations or admin).
     """
-    from app.models.project_work_item import ProjectWorkItem
-    from app.models.project_join_request import ProjectJoinRequest
-
     project = await _get_project_or_404(project_id)
-        
-    await ProjectWorkItem.find(ProjectWorkItem.project_id == project.id).delete()
-    await ProjectJoinRequest.find(ProjectJoinRequest.project_id == project.id).delete()
-    await project.delete()
+
+    await _delete_project_with_related_records(project)
     return None

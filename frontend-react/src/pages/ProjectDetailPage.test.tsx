@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
     getProject: vi.fn(),
     getProjectWorkItems: vi.fn(),
     getProjectJoinRequests: vi.fn(),
+    listProjectFiles: vi.fn(),
     requestProjectAccess: vi.fn(),
     reviewProjectJoinRequest: vi.fn(),
     createProjectWorkItem: vi.fn(),
@@ -28,6 +29,7 @@ vi.mock('../lib/api', () => ({
         getProject: mocks.getProject,
         getProjectWorkItems: mocks.getProjectWorkItems,
         getProjectJoinRequests: mocks.getProjectJoinRequests,
+        listProjectFiles: mocks.listProjectFiles,
         requestProjectAccess: mocks.requestProjectAccess,
         reviewProjectJoinRequest: mocks.reviewProjectJoinRequest,
         createProjectWorkItem: mocks.createProjectWorkItem,
@@ -129,6 +131,7 @@ function makeJoinRequest(overrides: Partial<ProjectJoinRequest> = {}): ProjectJo
         user_id: 'outsider-1',
         user_email: 'outsider@example.com',
         user_name: 'Outside Volunteer',
+        request_type: 'access',
         message: 'I can help with follow-up.',
         status: 'pending',
         requested_at: '2026-03-25T10:00:00Z',
@@ -174,6 +177,7 @@ describe('ProjectDetailPage flows', () => {
         mocks.getProject.mockResolvedValue(makeProject());
         mocks.getProjectWorkItems.mockResolvedValue([]);
         mocks.getProjectJoinRequests.mockResolvedValue([]);
+        mocks.listProjectFiles.mockResolvedValue([]);
         mocks.requestProjectAccess.mockResolvedValue(makeJoinRequest());
         mocks.reviewProjectJoinRequest.mockResolvedValue(makeJoinRequest({ status: 'approved' }));
         mocks.createProjectWorkItem.mockResolvedValue(makeWorkItem());
@@ -233,10 +237,120 @@ describe('ProjectDetailPage flows', () => {
 
         await waitFor(() => {
             expect(mocks.requestProjectAccess).toHaveBeenCalledWith('project-1', {
+                request_type: 'access',
                 message: 'I can help with volunteer follow-up.',
             });
         });
         expect(await screen.findByText(/Request pending approval since/i)).toBeInTheDocument();
+    });
+
+    it('lets a volunteer request project leadership', async () => {
+        const volunteer = makeUser({
+            id: 'member-2',
+            email: 'member-two@example.com',
+            name: 'Member Two',
+        });
+
+        mocks.useAuth.mockReturnValue({
+            user: volunteer,
+            isLoading: false,
+            isAuthenticated: true,
+            isAdmin: false,
+            isTeamLead: false,
+            canManageOperations: false,
+            canAccessAdminPortal: false,
+            isDelegatedAdmin: false,
+            adminScopes: [],
+            hasAdminScope: vi.fn(() => false),
+            needsName: false,
+        });
+        mocks.getProject.mockResolvedValue(
+            makeProject({
+                lead: makeProjectUser({ id: 'lead-1', name: 'Lead User', email: 'lead@example.com', role: 'team_lead' }),
+                members: [makeProjectUser({ id: 'member-1', name: 'Member One' })],
+            }),
+        );
+        mocks.getProjectJoinRequests
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([makeJoinRequest({ id: 'lead-request-1', request_type: 'lead', user_id: volunteer.id, user_email: volunteer.email, user_name: volunteer.name })]);
+        mocks.requestProjectAccess.mockResolvedValue(
+            makeJoinRequest({ id: 'lead-request-1', request_type: 'lead', user_id: volunteer.id, user_email: volunteer.email, user_name: volunteer.name }),
+        );
+
+        renderProjectDetail();
+
+        expect(await screen.findByText('Request to Lead This Project')).toBeInTheDocument();
+
+        await userEvent.type(
+            screen.getByLabelText(/why do you want to lead/i),
+            'I can coordinate tasks and keep updates moving.',
+        );
+        await userEvent.click(screen.getByRole('button', { name: /request lead role/i }));
+
+        await waitFor(() => {
+            expect(mocks.requestProjectAccess).toHaveBeenCalledWith('project-1', {
+                request_type: 'lead',
+                message: 'I can coordinate tasks and keep updates moving.',
+            });
+        });
+        expect(await screen.findByText(/Leadership request pending since/i)).toBeInTheDocument();
+    });
+
+    it('lets a volunteer request project deletion', async () => {
+        const volunteer = makeUser({
+            id: 'member-3',
+            email: 'member-three@example.com',
+            name: 'Member Three',
+        });
+
+        mocks.useAuth.mockReturnValue({
+            user: volunteer,
+            isLoading: false,
+            isAuthenticated: true,
+            isAdmin: false,
+            isTeamLead: false,
+            canManageOperations: false,
+            canAccessAdminPortal: false,
+            isDelegatedAdmin: false,
+            adminScopes: [],
+            hasAdminScope: vi.fn(() => false),
+            needsName: false,
+        });
+        mocks.getProject.mockResolvedValue(
+            makeProject({
+                lead: makeProjectUser({ id: 'lead-1', name: 'Lead User', email: 'lead@example.com', role: 'team_lead' }),
+                members: [makeProjectUser({ id: 'member-1', name: 'Member One' })],
+            }),
+        );
+        mocks.getProjectJoinRequests
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([makeJoinRequest({ id: 'delete-request-1', request_type: 'delete', user_id: volunteer.id, user_email: volunteer.email, user_name: volunteer.name })]);
+        mocks.requestProjectAccess.mockResolvedValue(
+            makeJoinRequest({ id: 'delete-request-1', request_type: 'delete', user_id: volunteer.id, user_email: volunteer.email, user_name: volunteer.name }),
+        );
+
+        renderProjectDetail();
+
+        expect(await screen.findByRole('button', { name: /request deletion/i })).toBeInTheDocument();
+        expect(screen.queryByLabelText(/why should this project be deleted/i)).not.toBeInTheDocument();
+
+        await userEvent.click(screen.getByRole('button', { name: /request deletion/i }));
+
+        expect(await screen.findByText('Request Project Deletion')).toBeInTheDocument();
+
+        await userEvent.type(
+            screen.getByLabelText(/why should this project be deleted/i),
+            'This project is complete and can be removed.',
+        );
+        await userEvent.click(screen.getByRole('button', { name: /send deletion request/i }));
+
+        await waitFor(() => {
+            expect(mocks.requestProjectAccess).toHaveBeenCalledWith('project-1', {
+                request_type: 'delete',
+                message: 'This project is complete and can be removed.',
+            });
+        });
+        expect(await screen.findByText(/Deletion request pending since/i)).toBeInTheDocument();
     });
 
     it('shows the project lead role with email context in the header', async () => {
@@ -255,9 +369,39 @@ describe('ProjectDetailPage flows', () => {
         renderProjectDetail();
 
         expect(await screen.findByText('Website Refresh')).toBeInTheDocument();
-        expect(screen.getByText('Team Lead:')).toBeInTheDocument();
-        expect(screen.getByText('ujwalvanjare7@gmail.com')).toBeInTheDocument();
-        expect(screen.getByText('Pending login')).toBeInTheDocument();
+        expect(screen.getByText('Project Lead:')).toBeInTheDocument();
+        expect(screen.getAllByText('ujwalvanjare7@gmail.com').length).toBeGreaterThan(0);
+        expect(screen.getAllByText('Team Lead account').length).toBeGreaterThan(0);
+        expect(screen.getAllByText('Pending login').length).toBeGreaterThan(0);
+    });
+
+    it('shows the full project team roster with lead and member roles', async () => {
+        mocks.getProject.mockResolvedValue(
+            makeProject({
+                lead: makeProjectUser({
+                    id: 'lead-1',
+                    name: 'Harshini kunjeti',
+                    email: 'harshini@example.com',
+                    role: 'volunteer',
+                }),
+                members: [
+                    makeProjectUser({
+                        id: 'member-1',
+                        name: 'Leena D',
+                        email: 'leena@example.com',
+                        role: 'volunteer',
+                    }),
+                ],
+            }),
+        );
+
+        renderProjectDetail();
+
+        expect(await screen.findByText('Project Team')).toBeInTheDocument();
+        expect(screen.getAllByText('Harshini kunjeti').length).toBeGreaterThan(0);
+        expect(screen.getByText('Leena D')).toBeInTheDocument();
+        expect(screen.getByText('Project Lead')).toBeInTheDocument();
+        expect(screen.getAllByText('Volunteer account').length).toBeGreaterThanOrEqual(2);
     });
 
     it('lets a board manager approve pending join requests', async () => {
@@ -293,7 +437,7 @@ describe('ProjectDetailPage flows', () => {
 
         renderProjectDetail();
 
-        expect(await screen.findByText(/Pending Join Requests/i)).toBeInTheDocument();
+        expect(await screen.findByText(/Pending Project Requests/i)).toBeInTheDocument();
 
         await userEvent.click(screen.getByRole('button', { name: 'Approve' }));
 
@@ -301,8 +445,70 @@ describe('ProjectDetailPage flows', () => {
             expect(mocks.reviewProjectJoinRequest).toHaveBeenCalledWith('project-1', 'join-1', 'approved');
         });
         await waitFor(() => {
-            expect(screen.queryByText(/Pending Join Requests/i)).not.toBeInTheDocument();
+            expect(screen.queryByText(/Pending Project Requests/i)).not.toBeInTheDocument();
         });
+    });
+
+    it('returns to the project directory after approving a delete request', async () => {
+        const leadUser = makeUser({
+            id: 'lead-1',
+            email: 'lead@example.com',
+            name: 'Lead User',
+            role: 'team_lead',
+        });
+
+        mocks.useAuth.mockReturnValue({
+            user: leadUser,
+            isLoading: false,
+            isAuthenticated: true,
+            isAdmin: false,
+            isTeamLead: true,
+            canManageOperations: true,
+            canAccessAdminPortal: false,
+            isDelegatedAdmin: false,
+            adminScopes: [],
+            hasAdminScope: vi.fn(() => false),
+            needsName: false,
+        });
+        mocks.getProject.mockResolvedValue(
+            makeProject({
+                lead: makeProjectUser({ id: 'lead-1', name: 'Lead User', email: 'lead@example.com', role: 'team_lead' }),
+                members: [makeProjectUser()],
+            }),
+        );
+        mocks.getProjectJoinRequests.mockResolvedValue([
+            makeJoinRequest({
+                id: 'delete-request-1',
+                request_type: 'delete',
+                user_id: 'member-9',
+                user_email: 'member-nine@example.com',
+                user_name: 'Member Nine',
+            }),
+        ]);
+        mocks.reviewProjectJoinRequest.mockResolvedValue(
+            makeJoinRequest({
+                id: 'delete-request-1',
+                request_type: 'delete',
+                user_id: 'member-9',
+                user_email: 'member-nine@example.com',
+                user_name: 'Member Nine',
+                status: 'approved',
+            }),
+        );
+
+        renderProjectDetail();
+
+        expect(await screen.findByText(/Pending Project Requests/i)).toBeInTheDocument();
+
+        await userEvent.click(screen.getByRole('button', { name: 'Approve' }));
+
+        await waitFor(() => {
+            expect(mocks.reviewProjectJoinRequest).toHaveBeenCalledWith('project-1', 'delete-request-1', 'approved');
+        });
+        expect(await screen.findByText('Projects Route')).toBeInTheDocument();
+        expect(mocks.getProject).toHaveBeenCalledTimes(1);
+        expect(mocks.getProjectWorkItems).toHaveBeenCalledTimes(1);
+        expect(mocks.getProjectJoinRequests).toHaveBeenCalledTimes(1);
     });
 
     it('lets an assigned member move their own item and reassign it within the project team', async () => {

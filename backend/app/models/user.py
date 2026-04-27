@@ -8,8 +8,9 @@ from enum import Enum
 from typing import Optional, List
 
 from beanie import Document, Indexed
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
+from app.core.email_identity import normalize_email
 from app.core.time import utc_now
 from app.models.admin_access import AdminAccessScope
 
@@ -29,6 +30,13 @@ class UserBase(BaseModel):
     role: UserRole = UserRole.VOLUNTEER
     team: Optional[str] = None
     is_active: bool = True
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email_value(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return normalize_email(str(value))
 
 
 class User(Document, UserBase):

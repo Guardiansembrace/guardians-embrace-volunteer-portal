@@ -26,6 +26,10 @@ class WorkEntry(BaseModel):
     hours: float = 0.0
     drive_link: Optional[str] = None
     tags: List[str] = []
+    # Optional link to a project work item
+    work_item_id: Optional[str] = None
+    # If set, the work item's status will be updated to this value when the submission is saved
+    work_item_status_update: Optional[str] = None
 
 
 class SubmissionBase(BaseModel):
@@ -37,12 +41,15 @@ class SubmissionBase(BaseModel):
     future_work: List[WorkEntry] = []  # What is planned
     
     # Summary
+    reported_hours: float = 0.0
+    credited_hours: float = 0.0
     total_hours: float = 0.0
     blockers: Optional[str] = None
     notes: Optional[str] = None
     
     # Custom forms
     custom_responses: dict = {}
+    hour_tracking_sections: List[str] = []
     
     # Status
     status: SubmissionStatus = SubmissionStatus.DRAFT
@@ -58,6 +65,14 @@ class Submission(Document, SubmissionBase):
     user_id: Indexed(str)
     user_email: str
     user_name: str
+
+    # Project reference
+    # Legacy submissions created before project workspaces launched may not
+    # have a project_id persisted yet. Keep them readable instead of crashing
+    # list queries that deserialize historical records.
+    project_id: Indexed(str) = ""
+    project_name: Optional[str] = None
+    visibility: str = "project_members"
     
     # Week identifier (e.g., "2026-W04")
     week_id: Indexed(str)
@@ -70,6 +85,8 @@ class Submission(Document, SubmissionBase):
     future_work: List[WorkEntry] = []
     
     # Summary
+    reported_hours: float = 0.0
+    credited_hours: float = 0.0
     total_hours: float = 0.0
     blockers: Optional[str] = None
     notes: Optional[str] = None
@@ -93,7 +110,12 @@ class Submission(Document, SubmissionBase):
         name = "submissions"
         use_state_management = True
         indexes = [
-            [("user_id", 1), ("week_id", 1)],  # Compound index for user+week
+            [("user_id", 1), ("week_id", 1), ("project_id", 1)],  # Compound index for user+week+project
+            [("user_id", 1), ("created_at", -1)],
+            [("week_id", 1), ("created_at", -1)],
+            [("week_id", 1), ("status", 1), ("created_at", -1)],
+            [("project_id", 1), ("week_start", -1)],
+            [("project_id", 1), ("status", 1), ("week_start", -1)],
         ]
     
     model_config = ConfigDict(
@@ -102,6 +124,8 @@ class Submission(Document, SubmissionBase):
                 "user_id": "507f1f77bcf86cd799439011",
                 "user_email": "volunteer@example.com",
                 "user_name": "John Doe",
+                "project_id": "507f1f77bcf86cd799439012",
+                "project_name": "Food Drive 2026",
                 "week_id": "2026-W04",
                 "past_work": [
                     {"description": "Completed outreach calls", "hours": 4.0}
@@ -112,6 +136,8 @@ class Submission(Document, SubmissionBase):
                 "future_work": [
                     {"description": "Plan community workshop", "hours": 0.0}
                 ],
+                "reported_hours": 6.0,
+                "credited_hours": 4.0,
                 "total_hours": 6.0,
                 "blockers": None,
                 "status": "submitted"
@@ -121,6 +147,8 @@ class Submission(Document, SubmissionBase):
 
 class SubmissionCreate(BaseModel):
     """Schema for creating/updating a submission."""
+    week_id: Optional[str] = None
+    project_id: str
     past_work: List[WorkEntry] = []
     present_work: List[WorkEntry] = []
     future_work: List[WorkEntry] = []
@@ -146,12 +174,17 @@ class SubmissionResponse(BaseModel):
     user_id: str
     user_email: str
     user_name: str
+    project_id: str
+    project_name: Optional[str] = None
+    visibility: str = "project_members"
     week_id: str
     week_start: datetime
     week_end: datetime
     past_work: List[WorkEntry]
     present_work: List[WorkEntry]
     future_work: List[WorkEntry]
+    reported_hours: float
+    credited_hours: float
     total_hours: float
     blockers: Optional[str]
     notes: Optional[str]
@@ -174,7 +207,11 @@ class SubmissionSummary(BaseModel):
     id: str
     user_id: str
     user_name: str
+    project_id: str
+    project_name: Optional[str] = None
     week_id: str
+    reported_hours: float
+    credited_hours: float
     total_hours: float
     status: SubmissionStatus
     submitted_at: Optional[datetime]

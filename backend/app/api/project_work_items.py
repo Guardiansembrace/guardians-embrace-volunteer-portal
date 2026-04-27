@@ -16,7 +16,7 @@ from app.core.project_access import (
     is_project_team_member,
 )
 from app.core.rate_limit import rate_limit_by_user
-from app.core.security import get_current_user
+from app.core.security import get_current_user, has_operations_access
 from app.core.time import utc_now
 from app.models.project import Project
 from app.models.project_work_item import (
@@ -136,7 +136,7 @@ async def _resolve_assignees(
         if not assignee.is_active:
             raise HTTPException(status_code=400, detail="Assignee must be active")
 
-        if not is_project_team_member(project, assignee):
+        if not is_project_team_member(project, assignee) and not has_operations_access(assignee):
             raise HTTPException(
                 status_code=400,
                 detail="Assignee must be part of the project team",
@@ -182,6 +182,32 @@ def _can_delete_work_item(
         current_user,
         operations_override=operations_override,
     )
+
+
+@router.get("/{project_id}/work-items/my-assigned", response_model=List[ProjectWorkItemResponse])
+async def list_my_assigned_work_items(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Return the current user's non-finished assigned work items for a project.
+
+    Used by the submission form to surface suggested work entries.
+    """
+    project = await _get_project_with_access(project_id, current_user)
+    user_id = current_user.id
+
+    all_items = await ProjectWorkItem.find(ProjectWorkItem.project_id == project.id).to_list()
+
+    assigned = [
+        item for item in all_items
+        if item.status != WorkItemStatus.FINISHED
+        and (
+            (item.assignee_id and str(item.assignee_id) == str(user_id))
+            or any(str(aid) == str(user_id) for aid in (item.assignee_ids or []))
+        )
+    ]
+    assigned.sort(key=lambda item: STATUS_SORT_ORDER[item.status])
+    return [_serialize_work_item(item) for item in assigned]
 
 
 @router.get("/{project_id}/work-items", response_model=List[ProjectWorkItemResponse])

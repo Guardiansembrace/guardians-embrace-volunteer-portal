@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { format, parseISO } from 'date-fns';
 import {
     AlertCircle,
@@ -13,7 +13,7 @@ import {
     ListFilter
 } from 'lucide-react';
 import { Navbar, Footer } from '../components/Layout';
-import { Badge, Button, EmptyState, LoadingSpinner } from '../components/ui';
+import { Badge, Button, EmptyState, GuidancePanel, LoadingSpinner } from '../components/ui';
 import { api } from '../lib/api';
 import { openPortalAwareLink } from '../lib/fileLinks';
 import type { Submission, SubmissionSummary } from '../lib/api';
@@ -21,8 +21,28 @@ import { useAuth } from '../lib/useAuth';
 
 type QueueView = 'needs-review' | 'blockers' | 'drafts' | 'reviewed' | 'all';
 
+function normalizeQueueView(value: string | null | undefined): QueueView | null {
+    if (value === 'needs-review' || value === 'blockers' || value === 'drafts' || value === 'reviewed' || value === 'all') {
+        return value;
+    }
+    return null;
+}
+
+function getSavedQueueView(): QueueView {
+    if (typeof window === 'undefined') {
+        return 'needs-review';
+    }
+
+    return normalizeQueueView(window.localStorage.getItem('admin-submissions-view')) ?? 'needs-review';
+}
+
 export default function AdminSubmissionsPage() {
     const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
+    const routeView = normalizeQueueView(searchParams.get('view'));
+    const routeWeek = searchParams.get('week') ?? '';
+    const routeStatus = searchParams.get('status') ?? '';
+    const routeVolunteerSearch = searchParams.get('q') ?? '';
     const { canAccessAdminPortal, hasAdminScope, isDelegatedAdmin, isLoading: authLoading, isAuthenticated } = useAuth();
     const volunteerSearchId = useId();
     const weekFilterId = useId();
@@ -32,19 +52,10 @@ export default function AdminSubmissionsPage() {
     const [submissions, setSubmissions] = useState<SubmissionSummary[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [loadError, setLoadError] = useState<string | null>(null);
-    const [weekFilter, setWeekFilter] = useState('');
-    const [statusFilter, setStatusFilter] = useState('');
-    const [volunteerSearch, setVolunteerSearch] = useState('');
-    const [activeView, setActiveView] = useState<QueueView>(() => {
-        if (typeof window === 'undefined') {
-            return 'needs-review';
-        }
-        const savedView = window.localStorage.getItem('admin-submissions-view');
-        if (savedView === 'needs-review' || savedView === 'blockers' || savedView === 'drafts' || savedView === 'reviewed' || savedView === 'all') {
-            return savedView;
-        }
-        return 'needs-review';
-    });
+    const [weekFilter, setWeekFilter] = useState(() => routeWeek);
+    const [statusFilter, setStatusFilter] = useState(() => routeStatus);
+    const [volunteerSearch, setVolunteerSearch] = useState(() => routeVolunteerSearch);
+    const [activeView, setActiveView] = useState<QueueView>(() => routeView ?? getSavedQueueView());
     const [viewingSubmission, setViewingSubmission] = useState<Submission | null>(null);
     const [loadingDetail, setLoadingDetail] = useState(false);
     const [reviewing, setReviewing] = useState(false);
@@ -66,6 +77,21 @@ export default function AdminSubmissionsPage() {
     useEffect(() => {
         window.localStorage.setItem('admin-submissions-view', activeView);
     }, [activeView]);
+
+    useEffect(() => {
+        const nextView = routeView ?? getSavedQueueView();
+        const nextWeek = routeWeek;
+        const nextStatus = routeStatus;
+        const nextVolunteerSearch = routeVolunteerSearch;
+
+        setActiveView((current) => current === nextView ? current : nextView);
+        setWeekFilter((current) => current === nextWeek ? current : nextWeek);
+        setStatusFilter((current) => current === nextStatus ? current : nextStatus);
+        setVolunteerSearch((current) => current === nextVolunteerSearch ? current : nextVolunteerSearch);
+        if (nextWeek || nextStatus || nextVolunteerSearch) {
+            setShowFilters(true);
+        }
+    }, [routeStatus, routeView, routeVolunteerSearch, routeWeek]);
 
     const loadSubmissions = async () => {
         try {
@@ -224,6 +250,20 @@ export default function AdminSubmissionsPage() {
                         </p>
                     </div>
 
+                    <GuidancePanel
+                        title="Review Flow"
+                        description="A few shared rules keep the review queue easier to triage and more consistent for volunteers."
+                        items={[
+                            'Needs Review is the main queue for submitted updates that are ready for action.',
+                            'Blockers should usually be checked first because someone is waiting on help, access, or a decision.',
+                            'Drafts can still change, so treat them as in-progress context rather than final records.',
+                            'Leave review notes before marking a submission reviewed whenever the volunteer may need feedback or follow-up.',
+                        ]}
+                        icon={<FileText size={18} />}
+                        tone="slate"
+                        style={{ marginBottom: '1.5rem' }}
+                    />
+
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.5rem', marginBottom: '3rem' }}>
                         <AdminMetric
                             title="Needs Review"
@@ -361,7 +401,7 @@ export default function AdminSubmissionsPage() {
                                         <tr>
                                             <th scope="col" style={{ padding: '1rem 1.5rem', color: '#64748b', fontWeight: 700, fontSize: '0.75rem', letterSpacing: '0.05em' }}>Volunteer</th>
                                             <th scope="col" style={{ padding: '1rem', color: '#64748b', fontWeight: 700, fontSize: '0.75rem', letterSpacing: '0.05em' }}>Week</th>
-                                            <th scope="col" style={{ padding: '1rem', color: '#64748b', fontWeight: 700, fontSize: '0.75rem', letterSpacing: '0.05em' }}>Hours</th>
+                                            <th scope="col" style={{ padding: '1rem', color: '#64748b', fontWeight: 700, fontSize: '0.75rem', letterSpacing: '0.05em' }}>Reported</th>
                                             <th scope="col" style={{ padding: '1rem', color: '#64748b', fontWeight: 700, fontSize: '0.75rem', letterSpacing: '0.05em' }}>Status</th>
                                             <th scope="col" style={{ padding: '1rem', color: '#64748b', fontWeight: 700, fontSize: '0.75rem', letterSpacing: '0.05em' }}>Blockers</th>
                                             <th scope="col" style={{ padding: '1rem', color: '#64748b', fontWeight: 700, fontSize: '0.75rem', letterSpacing: '0.05em' }}>Submitted</th>
@@ -375,7 +415,7 @@ export default function AdminSubmissionsPage() {
                                                     <span style={{ fontWeight: 700, color: '#0f172a' }}>{submission.user_name}</span>
                                                 </td>
                                                 <td style={{ padding: '1rem', color: '#475569', fontSize: '0.9rem' }}>{submission.week_id}</td>
-                                                <td style={{ padding: '1rem', color: '#475569', fontWeight: 600 }}>{submission.total_hours.toFixed(1)}h</td>
+                                                <td style={{ padding: '1rem', color: '#475569', fontWeight: 600 }}>{(submission.reported_hours ?? submission.total_hours).toFixed(1)}h</td>
                                                 <td style={{ padding: '1rem' }}>
                                                     <Badge variant={submission.status as 'draft' | 'submitted' | 'reviewed'}>
                                                         {submission.status.charAt(0).toUpperCase() + submission.status.slice(1)}
@@ -463,8 +503,9 @@ export default function AdminSubmissionsPage() {
                                         <p style={{ margin: '0.25rem 0 0', fontWeight: 800, fontSize: '1.1rem', color: '#0f172a' }}>{viewingSubmission.week_id}</p>
                                     </div>
                                     <div>
-                                        <p style={{ margin: 0, color: '#64748b', fontSize: '0.8rem', textTransform: 'uppercase', fontWeight: 700 }}>Hours</p>
-                                        <p style={{ margin: '0.25rem 0 0', fontWeight: 800, fontSize: '1.1rem', color: '#0f172a' }}>{viewingSubmission.total_hours}h</p>
+                                        <p style={{ margin: 0, color: '#64748b', fontSize: '0.8rem', textTransform: 'uppercase', fontWeight: 700 }}>Reported</p>
+                                        <p style={{ margin: '0.25rem 0 0', fontWeight: 800, fontSize: '1.1rem', color: '#0f172a' }}>{viewingSubmission.reported_hours ?? viewingSubmission.total_hours}h</p>
+                                        <p style={{ margin: '0.2rem 0 0', color: '#64748b', fontSize: '0.8rem', fontWeight: 600 }}>Credited {viewingSubmission.credited_hours ?? viewingSubmission.reported_hours ?? viewingSubmission.total_hours}h</p>
                                     </div>
                                     <div>
                                         <p style={{ margin: 0, color: '#64748b', fontSize: '0.8rem', textTransform: 'uppercase', fontWeight: 700 }}>Status</p>

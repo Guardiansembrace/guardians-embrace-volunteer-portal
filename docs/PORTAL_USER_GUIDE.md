@@ -54,7 +54,10 @@ Volunteers can:
 - save drafts and submit updates for review
 - view their own submission comments and reply in their own thread
 - browse all projects and see boards, work items, and members
+- create new projects
 - request access to a project they want to help with
+- request to become the lead of a project
+- request deletion of a project
 - contribute to project work after being added to that project
 
 Volunteers cannot, unless separately granted access:
@@ -76,7 +79,9 @@ Team leads can:
 - add and remove project members
 - assign or reassign project work items
 - assign one work item to multiple teammates
-- approve or decline project join requests
+- approve or decline project access requests
+- approve or decline project lead requests
+- approve or decline project deletion requests
 - help organize work on project boards
 
 Team leads do not automatically get full admin portal access. If a team lead needs extra tools like submission review, reminders, user management, or settings access, an admin should grant delegated scopes.

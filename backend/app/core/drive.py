@@ -11,6 +11,7 @@ Shared Drive ID: configured via GOOGLE_DRIVE_SHARED_DRIVE_ID env var
 import io
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple, Dict, Any, List
 import logging
@@ -21,6 +22,7 @@ from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 from googleapiclient.errors import HttpError
 
 from app.core.config import get_settings
+from app.models.project_file import ProjectFileSourceType
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,18 @@ class SharedDriveService:
         self._service: Optional[Resource] = None
         self._shared_drive_id = self.settings.google_drive_shared_drive_id
         self._creds_json = self.settings.clean_google_drive_credentials_json
+
+    def _sanitize_folder_name(self, value: str, *, fallback: str) -> str:
+        """Sanitize a human-readable folder name."""
+        safe_value = "".join(
+            c for c in str(value or "") if c.isalnum() or c in (" ", "-", "_", ".")
+        ).strip()
+        return safe_value or fallback
+
+    def _project_folder_name(self, project_id: str, project_name: str) -> str:
+        safe_project_name = self._sanitize_folder_name(project_name, fallback="Project")
+        safe_project_id = self._sanitize_folder_name(project_id, fallback="project")
+        return f"{safe_project_id}-{safe_project_name}"
 
     # ── Initialization ──────────────────────────────────────────────
 
@@ -194,6 +208,67 @@ class SharedDriveService:
 
         return week_folder_id
 
+    def get_project_root_folder(self, project_id: str, project_name: str) -> tuple[str, str]:
+        """Get or create the readable project root folder."""
+        projects_root_id = self._find_or_create_folder("01-Projects", self._shared_drive_id)
+        project_folder_name = self._project_folder_name(project_id, project_name)
+        project_root_id = self._find_or_create_folder(project_folder_name, projects_root_id)
+        return project_root_id, project_folder_name
+
+    def get_project_submission_folder(
+        self,
+        *,
+        project_id: str,
+        project_name: str,
+        volunteer_name: str,
+        week_id: str,
+    ) -> tuple[str, str]:
+        """Get or create the submission files folder for a project/week/user."""
+        project_root_id, project_folder_name = self.get_project_root_folder(project_id, project_name)
+        submissions_root_id = self._find_or_create_folder("01-Submissions", project_root_id)
+        volunteer_folder_name = self._sanitize_folder_name(volunteer_name, fallback="Unknown Volunteer")
+        volunteer_folder_id = self._find_or_create_folder(volunteer_folder_name, submissions_root_id)
+        week_folder_id = self._find_or_create_folder(week_id, volunteer_folder_id)
+        submission_files_folder_id = self._find_or_create_folder("01-Submission-Files", week_folder_id)
+        folder_path = f"01-Projects/{project_folder_name}/01-Submissions/{volunteer_folder_name}/{week_id}/01-Submission-Files"
+        return submission_files_folder_id, folder_path
+
+    def get_project_general_files_folder(
+        self,
+        *,
+        project_id: str,
+        project_name: str,
+        volunteer_name: str,
+        upload_date: str,
+    ) -> tuple[str, str]:
+        """Get or create the general project files folder."""
+        project_root_id, project_folder_name = self.get_project_root_folder(project_id, project_name)
+        files_root_id = self._find_or_create_folder("02-Project-Files", project_root_id)
+        volunteer_folder_name = self._sanitize_folder_name(volunteer_name, fallback="Unknown Volunteer")
+        volunteer_folder_id = self._find_or_create_folder(volunteer_folder_name, files_root_id)
+        date_folder_id = self._find_or_create_folder(upload_date, volunteer_folder_id)
+        folder_path = f"01-Projects/{project_folder_name}/02-Project-Files/{volunteer_folder_name}/{upload_date}"
+        return date_folder_id, folder_path
+
+    def get_project_work_item_folder(
+        self,
+        *,
+        project_id: str,
+        project_name: str,
+        work_item_id: str,
+        work_item_title: Optional[str],
+        volunteer_name: str,
+    ) -> tuple[str, str]:
+        """Get or create the work-item folder for a project file."""
+        project_root_id, project_folder_name = self.get_project_root_folder(project_id, project_name)
+        files_root_id = self._find_or_create_folder("03-Work-Item-Files", project_root_id)
+        work_item_folder_name = self._project_folder_name(work_item_id, work_item_title or "Work Item")
+        work_item_folder_id = self._find_or_create_folder(work_item_folder_name, files_root_id)
+        volunteer_folder_name = self._sanitize_folder_name(volunteer_name, fallback="Unknown Volunteer")
+        volunteer_folder_id = self._find_or_create_folder(volunteer_folder_name, work_item_folder_id)
+        folder_path = f"01-Projects/{project_folder_name}/03-Work-Item-Files/{work_item_folder_name}/{volunteer_folder_name}"
+        return volunteer_folder_id, folder_path
+
     # ── Upload ──────────────────────────────────────────────────────
 
     def upload_file(
@@ -237,6 +312,76 @@ class SharedDriveService:
             "filename": filename,
             "drive_link": web_link,
             "storage_type": "shared_drive",
+        }
+
+    def upload_project_file(
+        self,
+        *,
+        file_data: bytes,
+        filename: str,
+        mime_type: str,
+        project_id: str,
+        project_name: str,
+        volunteer_name: str,
+        source_type: ProjectFileSourceType,
+        week_id: Optional[str] = None,
+        work_item_id: Optional[str] = None,
+        work_item_title: Optional[str] = None,
+    ) -> Dict[str, str]:
+        """Upload a file into a readable project-scoped folder structure."""
+        if source_type == ProjectFileSourceType.SUBMISSION:
+            if not week_id:
+                raise ValueError("week_id is required for submission uploads")
+            folder_id, folder_path = self.get_project_submission_folder(
+                project_id=project_id,
+                project_name=project_name,
+                volunteer_name=volunteer_name,
+                week_id=week_id,
+            )
+        elif source_type == ProjectFileSourceType.WORK_ITEM:
+            if not work_item_id:
+                raise ValueError("work_item_id is required for work item uploads")
+            folder_id, folder_path = self.get_project_work_item_folder(
+                project_id=project_id,
+                project_name=project_name,
+                work_item_id=work_item_id,
+                work_item_title=work_item_title,
+                volunteer_name=volunteer_name,
+            )
+        else:
+            upload_date = week_id or datetime.utcnow().date().isoformat()
+            folder_id, folder_path = self.get_project_general_files_folder(
+                project_id=project_id,
+                project_name=project_name,
+                volunteer_name=volunteer_name,
+                upload_date=upload_date,
+            )
+
+        service = self._get_service()
+        file_metadata = {"name": filename, "parents": [folder_id]}
+        media = MediaIoBaseUpload(io.BytesIO(file_data), mimetype=mime_type, resumable=True)
+
+        uploaded = (
+            service.files()
+            .create(
+                body=file_metadata,
+                media_body=media,
+                fields="id, webViewLink",
+                supportsAllDrives=True,
+            )
+            .execute()
+        )
+
+        file_id = uploaded["id"]
+        web_link = uploaded.get("webViewLink", "")
+        logger.info("[DRIVE] Uploaded project file '%s' -> %s (%s)", filename, file_id, folder_path)
+        return {
+            "file_id": file_id,
+            "filename": filename,
+            "drive_link": web_link,
+            "storage_type": "shared_drive",
+            "folder_id": folder_id,
+            "folder_path": folder_path,
         }
 
     # ── Download ────────────────────────────────────────────────────
@@ -453,6 +598,41 @@ def upload_file_to_drive(
         mime_type=mime_type,
         volunteer_name=volunteer_name,
         week_id=week_id,
+    )
+
+
+def upload_project_file_to_drive(
+    *,
+    file_data: bytes,
+    filename: str,
+    mime_type: str,
+    project_id: str,
+    project_name: str,
+    volunteer_name: str,
+    source_type: ProjectFileSourceType,
+    week_id: Optional[str] = None,
+    work_item_id: Optional[str] = None,
+    work_item_title: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Upload a project-scoped file to the organization's Shared Drive."""
+    service = get_drive_service()
+    if not service:
+        raise RuntimeError(
+            "Google Drive is not configured. "
+            "Set GOOGLE_DRIVE_SHARED_DRIVE_ID and service account credentials."
+        )
+
+    return service.upload_project_file(
+        file_data=file_data,
+        filename=filename,
+        mime_type=mime_type,
+        project_id=project_id,
+        project_name=project_name,
+        volunteer_name=volunteer_name,
+        source_type=source_type,
+        week_id=week_id,
+        work_item_id=work_item_id,
+        work_item_title=work_item_title,
     )
 
 

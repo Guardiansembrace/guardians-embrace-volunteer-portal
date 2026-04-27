@@ -4,6 +4,8 @@ import { format, parseISO, differenceInDays, differenceInHours, isPast } from 'd
 import {
     AlertCircle,
     ArrowRight,
+    ChevronDown,
+    ChevronUp,
     Clock3,
     Edit3,
     FileText,
@@ -16,7 +18,7 @@ import { useAuth } from '../lib/useAuth';
 import { api } from '../lib/api';
 import type { SubmissionSummary, WeekInfo } from '../lib/api';
 import { Navbar, Footer } from '../components/Layout';
-import { Badge, Button, Card, CardHeader, CardTitle, EmptyState, LoadingSpinner, StatCard } from '../components/ui';
+import { Badge, Button, Card, CardHeader, CardTitle, EmptyState, GuidancePanel, LoadingSpinner, StatCard } from '../components/ui';
 
 interface AdminStats {
     week_id: string;
@@ -39,6 +41,33 @@ interface CurrentWeekAction {
     href: string;
     secondaryHref?: string;
     secondaryLabel?: string;
+}
+
+type SubmissionQueueView = 'needs-review' | 'blockers' | 'drafts' | 'reviewed' | 'all';
+
+function buildAdminSubmissionsHref(filters: {
+    view?: SubmissionQueueView;
+    week?: string;
+    status?: 'draft' | 'submitted' | 'reviewed';
+    q?: string;
+}) {
+    const queryParams = new URLSearchParams();
+
+    if (filters.view) {
+        queryParams.set('view', filters.view);
+    }
+    if (filters.week) {
+        queryParams.set('week', filters.week);
+    }
+    if (filters.status) {
+        queryParams.set('status', filters.status);
+    }
+    if (filters.q) {
+        queryParams.set('q', filters.q);
+    }
+
+    const queryString = queryParams.toString();
+    return queryString ? `/admin/submissions?${queryString}` : '/admin/submissions';
 }
 
 function getCurrentWeekAction(weekInfo: WeekInfo | null): CurrentWeekAction {
@@ -185,6 +214,10 @@ export default function DashboardPage() {
     const [reminderResult, setReminderResult] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(true);
 
+    // Accordion states - open by default on desktop, closed on mobile
+    const [isTeamExpanded, setIsTeamExpanded] = useState(window.innerWidth >= 768);
+    const [isUpdatesExpanded, setIsUpdatesExpanded] = useState(window.innerWidth >= 768);
+
     useEffect(() => {
         if (!authLoading && !isAuthenticated) {
             navigate('/login');
@@ -264,6 +297,21 @@ export default function DashboardPage() {
     const hasUserAccess = canViewUsers || hasAdminScope('manage_invites') || canViewAdminAccess;
     const hasSubmissionAccess = hasAdminScope('review_submissions');
     const canSendReminders = hasAdminScope('send_reminders');
+    const currentAdminWeek = adminStats?.week_id ?? weekInfo?.week_id;
+    const submittedThisWeekHref = buildAdminSubmissionsHref({ view: 'all', week: currentAdminWeek });
+    const draftsOpenHref = buildAdminSubmissionsHref({ view: 'drafts', week: currentAdminWeek, status: 'draft' });
+    const blockersReportedHref = buildAdminSubmissionsHref({ view: 'blockers', week: currentAdminWeek });
+    const dashboardGuidelines = canAccessAdminPortal
+        ? [
+            'Use the top action card for the current week, then move into the admin workspace only when you need to review or manage something.',
+            'If blockers are reported, open those first. They usually signal a volunteer is waiting on help or approval.',
+            'Submissions, users, settings, and projects are separated on purpose so each area stays focused and easier to scan.',
+        ]
+        : [
+            'Use the highlighted weekly action to start, continue, or review your current submission.',
+            'Open your submission history when you want past hours, statuses, or reviewer feedback.',
+            'Use Projects to find active work, request access, and join project boards that match how you want to help.',
+        ];
 
     return (
         <div className="page-wrapper">
@@ -289,12 +337,12 @@ export default function DashboardPage() {
                         </div>
 
                         <div className="dashboard-hero-panel">
-                            <p className="dashboard-panel-label">This week</p>
+                            <p className="dashboard-panel-label hidden-mobile">This week</p>
                             <h2 className="dashboard-panel-title">{weekAction.title}</h2>
-                            <p className="dashboard-panel-copy">{weekAction.description}</p>
+                            <p className="dashboard-panel-copy hidden-mobile">{weekAction.description}</p>
 
                             {weekInfo && (
-                                <div className="dashboard-panel-meta">
+                                <div className="dashboard-panel-meta hidden-mobile">
                                     <div className="dashboard-panel-meta-item">
                                         <Clock3 size={16} />
                                         <span>{getDeadlineSummary(weekInfo)}</span>
@@ -327,6 +375,17 @@ export default function DashboardPage() {
                         </div>
                     </section>
 
+                    <GuidancePanel
+                        title={canAccessAdminPortal ? 'How To Use This Workspace' : 'Quick Navigation Guide'}
+                        description={canAccessAdminPortal
+                            ? 'The dashboard is the fastest way to decide what needs attention right now.'
+                            : 'This page is your launch point for weekly updates and project coordination.'}
+                        items={dashboardGuidelines}
+                        icon={<FileText size={18} />}
+                        tone="slate"
+                        style={{ marginBottom: '1.5rem' }}
+                    />
+
                     {canAccessAdminPortal && adminStats && (
                         <Card className="dashboard-admin-card">
                             <CardHeader>
@@ -343,16 +402,22 @@ export default function DashboardPage() {
                                     label="Submitted this week"
                                     value={adminStats.this_week.total_submitted}
                                     tone="default"
+                                    href={submittedThisWeekHref}
+                                    actionLabel="Open this week's queue"
                                 />
                                 <AdminMetric
                                     label="Drafts open"
                                     value={adminStats.this_week.total_drafts}
                                     tone="warning"
+                                    href={draftsOpenHref}
+                                    actionLabel="Review open drafts"
                                 />
                                 <AdminMetric
                                     label="Blockers reported"
                                     value={adminStats.this_week.blockers_count}
                                     tone={adminStats.this_week.blockers_count > 0 ? 'danger' : 'default'}
+                                    href={blockersReportedHref}
+                                    actionLabel="View blocked updates"
                                 />
                             </div>
 
@@ -411,7 +476,7 @@ export default function DashboardPage() {
                                 />
                                 <StatCard
                                     value={(user?.total_hours ?? 0).toFixed(1)}
-                                    label="Total hours"
+                                    label="Credited hours"
                                     icon={<Clock3 size={24} />}
                                 />
                                 <StatCard
@@ -423,53 +488,145 @@ export default function DashboardPage() {
                         </section>
                     )}
 
-                    {canAccessAdminPortal && hasSubmissionAccess && (
+                    {canAccessAdminPortal && (
                         <Card>
                             <CardHeader>
-                                <div className="dashboard-section-head flex-between">
-                                    <CardTitle>Team recent updates</CardTitle>
-                                    <Link to="/admin/submissions">
+                                <div 
+                                    className="dashboard-section-head flex-between" 
+                                    onClick={() => setIsTeamExpanded(!isTeamExpanded)}
+                                    style={{ cursor: 'pointer', userSelect: 'none' }}
+                                    aria-expanded={isTeamExpanded}
+                                >
+                                    <CardTitle style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
+                                        Team recent updates
+                                        {isTeamExpanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+                                    </CardTitle>
+                                    {isTeamExpanded && (
+                                        <Link to={buildAdminSubmissionsHref({})} onClick={(e) => e.stopPropagation()}>
+                                            <Button variant="ghost" size="sm">
+                                                View all <ArrowRight size={16} />
+                                            </Button>
+                                        </Link>
+                                    )}
+                                </div>
+                            </CardHeader>
+
+                            {isTeamExpanded && (
+                                isLoading ? (
+                                    <LoadingSpinner size={30} />
+                                ) : recentTeamSubmissions.length > 0 ? (
+                                    <div className="table-wrapper">
+                                        <table className="table">
+                                            <caption className="sr-only">
+                                                Five recent volunteer submissions with status, hours, and whether they need attention.
+                                            </caption>
+                                            <thead>
+                                                <tr>
+                                                    <th scope="col">Volunteer</th>
+                                                    <th scope="col" className="hidden-mobile">Week</th>
+                                                    <th scope="col">Status</th>
+                                                    <th scope="col" className="hidden-mobile">Hours</th>
+                                                    <th scope="col" className="hidden-mobile">Needs attention</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {recentTeamSubmissions.map((submission) => (
+                                                    <tr key={submission.id}>
+                                                        <td data-label="Volunteer"><strong>{submission.user_name}</strong></td>
+                                                        <td data-label="Week" className="hidden-mobile">{submission.week_id}</td>
+                                                        <td data-label="Status">
+                                                            <Badge variant={submission.status as 'draft' | 'submitted' | 'reviewed'}>
+                                                                {submission.status}
+                                                            </Badge>
+                                                        </td>
+                                                        <td data-label="Hours" className="hidden-mobile">{(submission.reported_hours ?? submission.total_hours).toFixed(1)}h</td>
+                                                        <td data-label="Needs attention" className="hidden-mobile">
+                                                            {submission.has_blockers ? (
+                                                                <Link
+                                                                    to={buildAdminSubmissionsHref({ view: 'blockers', week: submission.week_id, q: submission.user_name })}
+                                                                    style={{ color: 'var(--color-error)', fontWeight: 600, textDecoration: 'none' }}
+                                                                >
+                                                                    Blockers
+                                                                </Link>
+                                                            ) : (
+                                                                <span style={{ color: 'var(--color-text-muted)' }}>None</span>
+                                                            )}
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                ) : (
+                                    <EmptyState
+                                        icon={<FileText size={48} />}
+                                        title="No team submissions yet"
+                                        description="Recent volunteer activity will appear here once check-ins start coming in."
+                                    />
+                                )
+                            )}
+                        </Card>
+                    )}
+
+                    <Card>
+                        <CardHeader>
+                            <div 
+                                className="dashboard-section-head flex-between"
+                                onClick={() => setIsUpdatesExpanded(!isUpdatesExpanded)}
+                                style={{ cursor: 'pointer', userSelect: 'none' }}
+                                aria-expanded={isUpdatesExpanded}
+                            >
+                                <CardTitle style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
+                                    Your recent updates
+                                    {isUpdatesExpanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+                                </CardTitle>
+                                {isUpdatesExpanded && (
+                                    <Link to="/submissions" onClick={(e) => e.stopPropagation()}>
                                         <Button variant="ghost" size="sm">
                                             View all <ArrowRight size={16} />
                                         </Button>
                                     </Link>
-                                </div>
-                            </CardHeader>
+                                )}
+                            </div>
+                        </CardHeader>
 
-                            {isLoading ? (
+                        {isUpdatesExpanded && (
+                            isLoading ? (
                                 <LoadingSpinner size={30} />
-                            ) : recentTeamSubmissions.length > 0 ? (
+                            ) : recentSubmissions.length > 0 ? (
                                 <div className="table-wrapper">
                                     <table className="table">
                                         <caption className="sr-only">
-                                            Five recent volunteer submissions with status, hours, and whether they need attention.
+                                            Your most recent submissions with status, hours, submission date, and a link to open each entry.
                                         </caption>
                                         <thead>
                                             <tr>
-                                                <th scope="col">Volunteer</th>
-                                                <th scope="col" className="hidden-mobile">Week</th>
+                                                <th scope="col">Week</th>
                                                 <th scope="col">Status</th>
                                                 <th scope="col" className="hidden-mobile">Hours</th>
-                                                <th scope="col" className="hidden-mobile">Needs attention</th>
+                                                <th scope="col" className="hidden-mobile">Submitted</th>
+                                                <th scope="col">Action</th>
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            {recentTeamSubmissions.map((submission) => (
+                                            {recentSubmissions.map((submission) => (
                                                 <tr key={submission.id}>
-                                                    <td><strong>{submission.user_name}</strong></td>
-                                                    <td className="hidden-mobile">{submission.week_id}</td>
-                                                    <td>
+                                                    <td data-label="Week"><strong>{submission.week_id}</strong></td>
+                                                    <td data-label="Status">
                                                         <Badge variant={submission.status as 'draft' | 'submitted' | 'reviewed'}>
                                                             {submission.status}
                                                         </Badge>
                                                     </td>
-                                                    <td className="hidden-mobile">{submission.total_hours.toFixed(1)}h</td>
-                                                    <td className="hidden-mobile">
-                                                        {submission.has_blockers ? (
-                                                            <span style={{ color: 'var(--color-error)', fontWeight: 600 }}>Blockers</span>
-                                                        ) : (
-                                                            <span style={{ color: 'var(--color-text-muted)' }}>None</span>
-                                                        )}
+                                                    <td data-label="Hours" className="hidden-mobile">{(submission.reported_hours ?? submission.total_hours).toFixed(1)}h</td>
+                                                    <td data-label="Submitted" className="hidden-mobile">
+                                                        {submission.submitted_at
+                                                            ? format(parseISO(submission.submitted_at), 'MMM d, yyyy')
+                                                            : 'Not submitted'}
+                                                    </td>
+                                                    <td data-label="Action">
+                                                        <Link to={`/submissions/${submission.id}`}>
+                                                            <Button variant="ghost" size="sm">Open</Button>
+                                                        </Link>
                                                     </td>
                                                 </tr>
                                             ))}
@@ -479,78 +636,15 @@ export default function DashboardPage() {
                             ) : (
                                 <EmptyState
                                     icon={<FileText size={48} />}
-                                    title="No team submissions yet"
-                                    description="Recent volunteer activity will appear here once check-ins start coming in."
+                                    title="No submissions yet"
+                                    description="Once you create a check-in, the latest entries will show up here."
+                                    action={(
+                                        <Link to="/submissions/new">
+                                            <Button variant="primary">Create first submission</Button>
+                                        </Link>
+                                    )}
                                 />
-                            )}
-                        </Card>
-                    )}
-
-                    <Card>
-                        <CardHeader>
-                            <div className="dashboard-section-head flex-between">
-                                <CardTitle>Your recent updates</CardTitle>
-                                <Link to="/submissions">
-                                    <Button variant="ghost" size="sm">
-                                        View all <ArrowRight size={16} />
-                                    </Button>
-                                </Link>
-                            </div>
-                        </CardHeader>
-
-                        {isLoading ? (
-                            <LoadingSpinner size={30} />
-                        ) : recentSubmissions.length > 0 ? (
-                            <div className="table-wrapper">
-                                <table className="table">
-                                    <caption className="sr-only">
-                                        Your most recent submissions with status, hours, submission date, and a link to open each entry.
-                                    </caption>
-                                    <thead>
-                                        <tr>
-                                            <th scope="col">Week</th>
-                                            <th scope="col">Status</th>
-                                            <th scope="col" className="hidden-mobile">Hours</th>
-                                            <th scope="col" className="hidden-mobile">Submitted</th>
-                                            <th scope="col">Action</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {recentSubmissions.map((submission) => (
-                                            <tr key={submission.id}>
-                                                <td><strong>{submission.week_id}</strong></td>
-                                                <td>
-                                                    <Badge variant={submission.status as 'draft' | 'submitted' | 'reviewed'}>
-                                                        {submission.status}
-                                                    </Badge>
-                                                </td>
-                                                <td className="hidden-mobile">{submission.total_hours.toFixed(1)}h</td>
-                                                <td className="hidden-mobile">
-                                                    {submission.submitted_at
-                                                        ? format(parseISO(submission.submitted_at), 'MMM d, yyyy')
-                                                        : 'Not submitted'}
-                                                </td>
-                                                <td>
-                                                    <Link to={`/submissions/${submission.id}`}>
-                                                        <Button variant="ghost" size="sm">Open</Button>
-                                                    </Link>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                        ) : (
-                            <EmptyState
-                                icon={<FileText size={48} />}
-                                title="No submissions yet"
-                                description="Once you create a check-in, the latest entries will show up here."
-                                action={(
-                                    <Link to="/submissions/new">
-                                        <Button variant="primary">Create first submission</Button>
-                                    </Link>
-                                )}
-                            />
+                            )
                         )}
                     </Card>
                 </div>
@@ -564,10 +658,14 @@ function AdminMetric({
     label,
     value,
     tone,
+    href,
+    actionLabel,
 }: {
     label: string;
     value: number;
     tone: 'default' | 'warning' | 'danger';
+    href?: string;
+    actionLabel?: string;
 }) {
     const styleByTone = {
         default: {
@@ -586,10 +684,36 @@ function AdminMetric({
 
     const styles = styleByTone[tone];
 
-    return (
-        <div className="dashboard-admin-metric" style={{ background: styles.background }}>
+    const content = (
+        <div
+            className="dashboard-admin-metric"
+            style={{
+                background: styles.background,
+                cursor: href ? 'pointer' : 'default',
+                transition: 'transform 0.2s ease, box-shadow 0.2s ease',
+            }}
+        >
             <div className="dashboard-admin-value" style={{ color: styles.valueColor }}>{value}</div>
             <div className="dashboard-admin-label">{label}</div>
+            {href && (
+                <div style={{ marginTop: '0.65rem', fontSize: '0.78rem', fontWeight: 700, color: styles.valueColor, opacity: 0.85 }}>
+                    {actionLabel ?? 'Open queue'}
+                </div>
+            )}
         </div>
+    );
+
+    if (!href) {
+        return content;
+    }
+
+    return (
+        <Link
+            to={href}
+            style={{ textDecoration: 'none', display: 'block' }}
+            aria-label={`${label}: ${actionLabel ?? 'Open queue'}`}
+        >
+            {content}
+        </Link>
     );
 }

@@ -11,10 +11,17 @@ logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.core.admin_access import AdminAccessScope, build_user_response, get_admin_access_context, require_admin_scopes
+from app.core.admin_access import (
+    AdminAccessScope,
+    build_user_response,
+    build_user_responses,
+    get_admin_access_context,
+    require_admin_scopes,
+)
 from app.core.rate_limit import rate_limit_by_user
 from app.core.security import get_current_user, has_operations_access
 from app.core.time import utc_now
+from app.core.user_stats import sync_user_submission_stats
 from app.models.user import User, UserRole, UserResponse, UserUpdate, UserAdminUpdate, SetNameRequest
 
 router = APIRouter(prefix="/users", tags=["Users"])
@@ -23,6 +30,10 @@ router = APIRouter(prefix="/users", tags=["Users"])
 @router.get("/me", response_model=UserResponse)
 async def get_current_user_profile(current_user: User = Depends(get_current_user)):
     """Get the current authenticated user's profile."""
+    try:
+        await sync_user_submission_stats(current_user)
+    except Exception:
+        logger.warning("Failed to sync submission stats for %s", current_user.email, exc_info=True)
     return await build_user_response(current_user)
 
 
@@ -125,7 +136,7 @@ async def list_all_users(
     
     users = await User.find(query).skip(skip).limit(limit).to_list()
     
-    return [await build_user_response(u) for u in users]
+    return await build_user_responses(users)
 
 
 @router.get("/stats/overview")

@@ -15,7 +15,10 @@ This portal currently uses two layers of access:
 - View their own submission history
 - View their own submission comments and reply in their own thread
 - Browse all projects and project boards
+- Create new projects
 - Request access to projects
+- Request to become the lead of a project
+- Request deletion of a project
 - Contribute to project work after being added to a project
 - Cannot access the admin portal by default
 
@@ -25,7 +28,9 @@ This portal currently uses two layers of access:
 - Create, update, and delete projects
 - Add and remove project members
 - Manage project work items and assignments
-- Approve and decline project join requests
+- Approve and decline project access requests
+- Approve and decline project lead requests
+- Approve and decline project deletion requests
 - Can organize project operations directly in the project area
 - Does not automatically get the full admin portal
 - Needs delegated admin scopes for admin screens such as user management, submission review, reminders, settings, or audit logs

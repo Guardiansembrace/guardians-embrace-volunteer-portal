@@ -8,13 +8,15 @@
 
 import { reportAppError } from './monitoring';
 
+type LogArgs = unknown[];
+
 class Logger {
     private isProd = import.meta.env.PROD;
 
     /**
      * Log debug information - only visible in development
      */
-    debug(message: string, ...args: any[]) {
+    debug(message: string, ...args: LogArgs) {
         if (!this.isProd) {
             console.debug(`[DEBUG] ${message}`, ...args);
         }
@@ -23,7 +25,7 @@ class Logger {
     /**
      * Log general information - only visible in development
      */
-    info(message: string, ...args: any[]) {
+    info(message: string, ...args: LogArgs) {
         if (!this.isProd) {
             console.info(`[INFO] ${message}`, ...args);
         }
@@ -32,7 +34,7 @@ class Logger {
     /**
      * Log warnings - visible in all environments
      */
-    warn(message: string, ...args: any[]) {
+    warn(message: string, ...args: LogArgs) {
         console.warn(`[WARN] ${message}`, ...args);
     }
 

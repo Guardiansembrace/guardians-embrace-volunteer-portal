@@ -54,7 +54,10 @@ If you are a volunteer, you can:
 - save drafts and come back later
 - see your own submission history
 - open projects and see what is happening
+- create new projects
 - request access to projects
+- request to become the lead of a project
+- request deletion of a project
 - work on project tasks after you are added to a project
 
 Volunteers are the main day-to-day users of the portal.
@@ -78,7 +81,9 @@ Team leads can:
 - create work items
 - assign work items
 - assign one work item to more than one person
-- approve or decline project join requests
+- approve or decline project access requests
+- approve or decline project lead requests
+- approve or decline project deletion requests
 
 Team leads help keep projects moving.
 

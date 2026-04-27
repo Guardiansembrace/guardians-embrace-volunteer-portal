@@ -8,6 +8,18 @@ from datetime import datetime
 from app.core.utils import can_submit_for_week, get_week_boundaries, get_week_id, is_submission_window_open
 from app.core.weekly_updates import get_weekly_update_settings, set_weekly_update_settings
 from app.models.settings import WeeklyUpdateSettings
+from app.models.submission import Submission
+
+
+@pytest.fixture(autouse=True)
+def reset_weekly_update_settings():
+    """Keep tests isolated from runtime schedule changes made in other modules."""
+    original = get_weekly_update_settings()
+    set_weekly_update_settings(WeeklyUpdateSettings())
+    try:
+        yield
+    finally:
+        set_weekly_update_settings(original)
 
 
 class TestGetWeekId:
@@ -99,6 +111,10 @@ class TestIsSubmissionWindowOpen:
             assert is_submission_window_open("2026-W12", datetime(2026, 3, 22, 20, 1)) is False
         finally:
             set_weekly_update_settings(original)
+
+
+def test_submission_model_defaults_project_id_for_legacy_records():
+    assert Submission.model_fields["project_id"].default == ""
 
     def test_can_submit_for_week_honors_late_submission_setting(self):
         """Late submissions should remain available only when explicitly allowed."""

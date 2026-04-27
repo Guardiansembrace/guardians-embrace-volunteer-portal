@@ -3,15 +3,17 @@ from typing import List
 from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.projects import _get_project_or_404
+from app.api.projects import _delete_project_with_related_records, _get_project_or_404
 from app.core.admin_access import AdminAccessScope, get_admin_access_context
 from app.core.project_access import (
     can_manage_project_work,
     can_request_project_access,
+    is_project_lead,
+    is_project_member,
     is_project_team_member,
 )
 from app.core.rate_limit import rate_limit_by_user
-from app.core.security import get_current_user
+from app.core.security import get_current_user, has_operations_access
 from app.core.time import utc_now
 from app.models.project import Project
 from app.models.project_join_request import (
@@ -20,6 +22,7 @@ from app.models.project_join_request import (
     ProjectJoinRequestResponse,
     ProjectJoinRequestReview,
     ProjectJoinRequestStatus,
+    ProjectJoinRequestType,
 )
 from app.models.user import User
 
@@ -31,6 +34,10 @@ async def _has_project_management_access(current_user: User) -> bool:
     return access.has_any_scope(AdminAccessScope.MANAGE_PROJECTS)
 
 
+def _has_direct_delete_access(current_user: User, has_project_management_access: bool) -> bool:
+    return has_operations_access(current_user) or has_project_management_access
+
+
 def _serialize_join_request(join_request: ProjectJoinRequest) -> ProjectJoinRequestResponse:
     return ProjectJoinRequestResponse(
         id=str(join_request.id),
@@ -38,6 +45,7 @@ def _serialize_join_request(join_request: ProjectJoinRequest) -> ProjectJoinRequ
         user_id=str(join_request.user_id),
         user_email=join_request.user_email,
         user_name=join_request.user_name,
+        request_type=join_request.request_type,
         message=join_request.message,
         status=join_request.status,
         requested_at=join_request.requested_at,
@@ -91,25 +99,37 @@ async def create_project_join_request(
     join_request_in: ProjectJoinRequestCreate,
     current_user: User = Depends(get_current_user),
 ):
-    """Request to join a project as a working member."""
+    """Request project access, leadership, or deletion."""
     project = await _get_project_or_404(project_id, fetch_links=True)
     has_project_management_access = await _has_project_management_access(current_user)
-    if not can_request_project_access(project, current_user, operations_override=has_project_management_access):
-        raise HTTPException(status_code=400, detail="You already have project access")
+    if join_request_in.request_type == ProjectJoinRequestType.ACCESS:
+        if not can_request_project_access(project, current_user, operations_override=has_project_management_access):
+            raise HTTPException(status_code=400, detail="You already have project access")
+        duplicate_detail = "You already have a pending join request"
+    elif join_request_in.request_type == ProjectJoinRequestType.LEAD:
+        if can_manage_project_work(project, current_user, operations_override=has_project_management_access):
+            raise HTTPException(status_code=400, detail="You already manage this project")
+        duplicate_detail = "You already have a pending leadership request"
+    else:
+        if _has_direct_delete_access(current_user, has_project_management_access):
+            raise HTTPException(status_code=400, detail="You can delete this project directly")
+        duplicate_detail = "You already have a pending delete request"
 
     existing_request = await ProjectJoinRequest.find_one(
         ProjectJoinRequest.project_id == project.id,
         ProjectJoinRequest.user_id == current_user.id,
+        ProjectJoinRequest.request_type == join_request_in.request_type,
         ProjectJoinRequest.status == ProjectJoinRequestStatus.PENDING,
     )
     if existing_request:
-        raise HTTPException(status_code=400, detail="You already have a pending join request")
+        raise HTTPException(status_code=400, detail=duplicate_detail)
 
     join_request = ProjectJoinRequest(
         project_id=project.id,
         user_id=current_user.id,
         user_email=current_user.email,
         user_name=current_user.name,
+        request_type=join_request_in.request_type,
         message=join_request_in.message,
         status=ProjectJoinRequestStatus.PENDING,
         requested_at=utc_now(),
@@ -129,30 +149,57 @@ async def review_project_join_request(
     review_in: ProjectJoinRequestReview,
     current_user: User = Depends(get_current_user),
 ):
-    """Approve or decline a join request."""
+    """Approve or decline a project request."""
     project = await _get_project_or_404(project_id, fetch_links=True)
     has_project_management_access = await _has_project_management_access(current_user)
-    if not can_manage_project_work(project, current_user, operations_override=has_project_management_access):
+    join_request = await _get_join_request_or_404(project_id, join_request_id)
+    if join_request.request_type == ProjectJoinRequestType.DELETE:
+        if not _has_direct_delete_access(current_user, has_project_management_access):
+            raise HTTPException(status_code=403, detail="Direct project deletion access required")
+    elif not can_manage_project_work(project, current_user, operations_override=has_project_management_access):
         raise HTTPException(status_code=403, detail="Project management access required")
 
-    join_request = await _get_join_request_or_404(project_id, join_request_id)
     if join_request.status != ProjectJoinRequestStatus.PENDING:
         raise HTTPException(status_code=400, detail="Join request has already been reviewed")
-
-    if review_in.status == ProjectJoinRequestStatus.APPROVED:
-        user = await User.get(join_request.user_id)
-        if not user:
-            raise HTTPException(status_code=404, detail="Requested user not found")
-        if not user.is_active:
-            raise HTTPException(status_code=400, detail="Requested user must be active")
-        if not is_project_team_member(project, user):
-            project.members.append(user)
-            await project.save()
 
     join_request.status = review_in.status
     join_request.reviewed_at = utc_now()
     join_request.reviewed_by_id = current_user.id
     join_request.reviewed_by_name = current_user.name
+
+    if review_in.status == ProjectJoinRequestStatus.APPROVED:
+        if join_request.request_type == ProjectJoinRequestType.DELETE:
+            await join_request.save()
+            await _delete_project_with_related_records(project)
+            return _serialize_join_request(join_request)
+
+        user = await User.get(join_request.user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="Requested user not found")
+        if not user.is_active:
+            raise HTTPException(status_code=400, detail="Requested user must be active")
+        project_changed = False
+
+        if join_request.request_type == ProjectJoinRequestType.LEAD:
+            if project.lead and not is_project_member(project, project.lead):
+                project.members.append(project.lead)
+                project_changed = True
+
+            if not is_project_member(project, user):
+                project.members.append(user)
+                project_changed = True
+
+            if not is_project_lead(project, user):
+                project.lead = user
+                project_changed = True
+
+        elif not is_project_team_member(project, user):
+            project.members.append(user)
+            project_changed = True
+
+        if project_changed:
+            await project.save()
+
     await join_request.save()
 
     return _serialize_join_request(join_request)

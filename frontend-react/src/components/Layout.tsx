@@ -120,7 +120,7 @@ export function Navbar() {
                                     </div>
                                 </div>
                                 {user.picture && !imageError ? (
-                                    <img src={user.picture} alt={user.name} onError={() => setImageError(true)} style={{ width: 40, height: 40, borderRadius: '50%', border: '2px solid rgba(0,0,0,0.1)', objectFit: 'cover' }} />
+                                    <img src={user.picture} alt={user.name} referrerPolicy="no-referrer" onError={() => setImageError(true)} style={{ width: 40, height: 40, borderRadius: '50%', border: '2px solid rgba(0,0,0,0.1)', objectFit: 'cover' }} />
                                 ) : (
                                     <div style={{ width: 40, height: 40, borderRadius: '50%', background: 'var(--color-dark-bg)', color: 'var(--color-primary-gold)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '1.2rem', border: '2px solid rgba(0,0,0,0.1)' }}>
                                         {user.name.charAt(0).toUpperCase()}
@@ -226,12 +226,12 @@ export function Navbar() {
                     <div className="flex items-center">
                         <NavLink to="/dashboard" icon={<LayoutDashboard size={18} />} label="Dashboard" active={isActive('/dashboard')} />
                         <NavLink to="/projects" icon={<Briefcase size={18} />} label="Projects" active={isActive('/projects')} />
-                        <NavLink to="/submissions" icon={<FileText size={18} />} label="My Submissions" active={isActive('/submissions')} />
+                        <NavLink to="/submissions" icon={<FileText size={18} />} label={<><span className="hidden-mobile">My </span>Submissions</>} active={isActive('/submissions')} />
 
                         {canAccessAdminPortal && (
                             <>
-                                <div style={{ width: 1, height: 24, background: 'rgba(255,255,255,0.1)', margin: '0 0.5rem' }}></div>
-                                <NavLink to="/admin" icon={<Shield size={18} />} label="Admin Portal" active={location.pathname.startsWith('/admin')} />
+                                <div className="hidden-mobile" style={{ width: 1, height: 24, background: 'rgba(255,255,255,0.1)', margin: '0 0.5rem' }}></div>
+                                <NavLink to="/admin" icon={<Shield size={18} />} label={<>Admin<span className="hidden-mobile"> Portal</span></>} active={location.pathname.startsWith('/admin')} />
                             </>
                         )}
                     </div>
@@ -243,7 +243,7 @@ export function Navbar() {
     );
 }
 
-function NavLink({ to, icon, label, active }: { to: string; icon: React.ReactNode; label: string; active: boolean }) {
+function NavLink({ to, icon, label, active }: { to: string; icon: React.ReactNode; label: React.ReactNode; active: boolean }) {
     return (
         <Link
             to={to}
@@ -261,7 +261,7 @@ export function Footer() {
         <footer style={{
             background: 'var(--color-dark-bg)',
             color: 'var(--color-text-on-dark)',
-            padding: '2rem 0',
+            padding: '1rem 0',
             marginTop: 'auto',
         }}>
             <div className="container">

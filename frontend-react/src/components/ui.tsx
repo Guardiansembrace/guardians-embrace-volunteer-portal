@@ -189,3 +189,106 @@ export function EmptyState({ icon, title, description, action }: EmptyStateProps
         </div>
     );
 }
+
+interface GuidancePanelProps extends Omit<HTMLAttributes<HTMLDivElement>, 'title'> {
+    title: ReactNode;
+    description?: ReactNode;
+    items?: ReactNode[];
+    icon?: ReactNode;
+    tone?: 'gold' | 'slate' | 'warning';
+}
+
+export function GuidancePanel({
+    title,
+    description,
+    items = [],
+    icon,
+    tone = 'gold',
+    className = '',
+    style,
+    ...props
+}: GuidancePanelProps) {
+    const toneStyles = {
+        gold: {
+            background: '#fffbeb',
+            border: '#fde68a',
+            iconBackground: '#fef3c7',
+            iconColor: '#b45309',
+            text: '#78350f',
+            muted: '#92400e',
+        },
+        slate: {
+            background: '#f8fafc',
+            border: '#cbd5e1',
+            iconBackground: '#ffffff',
+            iconColor: '#475569',
+            text: '#0f172a',
+            muted: '#475569',
+        },
+        warning: {
+            background: '#fef2f2',
+            border: '#fecaca',
+            iconBackground: '#fee2e2',
+            iconColor: '#b91c1c',
+            text: '#7f1d1d',
+            muted: '#991b1b',
+        },
+    } as const;
+
+    const currentTone = toneStyles[tone];
+
+    return (
+        <div
+            className={className}
+            style={{
+                background: currentTone.background,
+                border: `1px solid ${currentTone.border}`,
+                borderRadius: '16px',
+                padding: '1rem 1.25rem',
+                boxShadow: '0 4px 16px rgba(15, 23, 42, 0.04)',
+                ...style,
+            }}
+            {...props}
+        >
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.85rem' }}>
+                {icon && (
+                    <div
+                        aria-hidden="true"
+                        style={{
+                            width: '2.25rem',
+                            height: '2.25rem',
+                            borderRadius: '12px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            background: currentTone.iconBackground,
+                            color: currentTone.iconColor,
+                            flexShrink: 0,
+                        }}
+                    >
+                        {icon}
+                    </div>
+                )}
+                <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: '0.95rem', fontWeight: 800, color: currentTone.text }}>
+                        {title}
+                    </div>
+                    {description && (
+                        <p style={{ margin: '0.35rem 0 0', fontSize: '0.9rem', lineHeight: 1.55, color: currentTone.muted }}>
+                            {description}
+                        </p>
+                    )}
+                    {items.length > 0 && (
+                        <ul className="hidden-mobile" style={{ margin: description ? '0.75rem 0 0 1.15rem' : '0.6rem 0 0 1.15rem', padding: 0, display: 'grid', gap: '0.4rem', color: currentTone.muted }}>
+                            {items.map((item, index) => (
+                                <li key={index} style={{ lineHeight: 1.5 }}>
+                                    {item}
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
