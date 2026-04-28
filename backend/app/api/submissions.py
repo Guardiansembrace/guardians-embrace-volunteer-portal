@@ -871,7 +871,24 @@ async def review_submission(
     submission.updated_at = utc_now()
     
     await submission.save()
-    
+
+    try:
+        volunteer = await User.get(ObjectId(submission.user_id))
+        if volunteer:
+            from app.core.notifications import notify_submission_reviewed
+            import asyncio
+            asyncio.create_task(notify_submission_reviewed(
+                submission_user_id=submission.user_id,
+                submission_user_name=volunteer.name,
+                submission_user_email=volunteer.email,
+                week_id=submission.week_id,
+                submission_id=submission_id,
+                admin_notes=review.admin_notes,
+                notif_pref=volunteer.notif_submission_reviewed,
+            ))
+    except Exception:
+        logger.warning("Failed to queue submission_reviewed notification for %s", submission_id, exc_info=True)
+
     return submission_to_response(submission)
 
 

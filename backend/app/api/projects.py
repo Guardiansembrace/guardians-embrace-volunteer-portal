@@ -250,6 +250,22 @@ async def add_member(
     project.members.append(user)
     await project.save()
 
+    try:
+        from app.core.notifications import notify_member_added
+        import asyncio
+        asyncio.create_task(notify_member_added(
+            user_id=str(user.id),
+            user_name=user.name,
+            user_email=user.email,
+            project_name=project.name,
+            project_id=project_id,
+            added_by_name=current_admin.name,
+            notif_pref=user.notif_project_activity,
+        ))
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("Failed to queue member_added notification", exc_info=True)
+
     refreshed_project = await Project.get(project.id, fetch_links=True)
     return _serialize_project(refreshed_project)
 
@@ -271,8 +287,25 @@ async def remove_member(
     
     # Filter out the user
     # Note: Beanie links might not be fully fetched, so we check IDs
+    removed_user = next((m for m in project.members if str(m.id) == user_id), None)
     project.members = [m for m in project.members if str(m.id) != user_id]
     await project.save()
+
+    if removed_user:
+        try:
+            from app.core.notifications import notify_member_removed
+            import asyncio
+            asyncio.create_task(notify_member_removed(
+                user_id=str(removed_user.id),
+                user_name=removed_user.name,
+                user_email=removed_user.email,
+                project_name=project.name,
+                removed_by_name=current_admin.name,
+                notif_pref=removed_user.notif_project_activity,
+            ))
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning("Failed to queue member_removed notification", exc_info=True)
 
     refreshed_project = await Project.get(project.id, fetch_links=True)
     return _serialize_project(refreshed_project)

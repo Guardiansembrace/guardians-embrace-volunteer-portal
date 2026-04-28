@@ -190,6 +190,40 @@ export interface SubmissionFormData {
 }
 
 // ============================================================================
+// Notification Types
+// ============================================================================
+
+export type NotificationType =
+    | 'submission_reviewed'
+    | 'admin_comment'
+    | 'join_request_reviewed'
+    | 'join_request_received'
+    | 'project_activity';
+
+export interface Notification {
+    id: string;
+    type: NotificationType;
+    title: string;
+    body: string;
+    link?: string;
+    read: boolean;
+    created_at: string;
+}
+
+export interface NotificationListResponse {
+    notifications: Notification[];
+    unread_count: number;
+}
+
+export interface NotificationPreferences {
+    notif_submission_reviewed: boolean;
+    notif_admin_comment: boolean;
+    notif_join_request_reviewed: boolean;
+    notif_join_request_received: boolean;
+    notif_project_activity: boolean;
+}
+
+// ============================================================================
 // Route Constants
 // ============================================================================
 

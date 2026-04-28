@@ -135,6 +135,43 @@ async def create_project_join_request(
         requested_at=utc_now(),
     )
     await join_request.create()
+
+    # Notify project lead and admins of the new request
+    try:
+        from app.core.notifications import notify_join_request_received
+        from app.models.user import UserRole
+        import asyncio
+
+        recipients: list[User] = []
+        if project.lead:
+            lead = project.lead if isinstance(project.lead, User) else await User.get(project.lead.ref.id)
+            if lead and lead.is_active and str(lead.id) != str(current_user.id):
+                recipients.append(lead)
+
+        admins = await User.find(User.role == UserRole.ADMIN, User.is_active == True).to_list()
+        seen_ids = {str(r.id) for r in recipients}
+        for admin in admins:
+            if str(admin.id) not in seen_ids and str(admin.id) != str(current_user.id):
+                recipients.append(admin)
+
+        for recipient in recipients:
+            asyncio.create_task(notify_join_request_received(
+                admin_user_id=str(recipient.id),
+                admin_name=recipient.name,
+                admin_email=recipient.email,
+                requester_name=current_user.name,
+                project_name=project.name,
+                project_id=str(project.id),
+                request_type=join_request_in.request_type.value,
+                join_request_id=str(join_request.id),
+                notif_pref=recipient.notif_join_request_received,
+            ))
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Failed to queue join_request_received notifications for project %s", project_id, exc_info=True
+        )
+
     return _serialize_join_request(join_request)
 
 
@@ -201,5 +238,27 @@ async def review_project_join_request(
             await project.save()
 
     await join_request.save()
+
+    # Notify the requester of the decision
+    if join_request.request_type != ProjectJoinRequestType.DELETE:
+        try:
+            requester = await User.get(join_request.user_id)
+            if requester:
+                from app.core.notifications import notify_join_request_reviewed
+                import asyncio
+                asyncio.create_task(notify_join_request_reviewed(
+                    requester_user_id=str(join_request.user_id),
+                    requester_name=requester.name,
+                    requester_email=requester.email,
+                    project_name=project.name,
+                    project_id=str(project.id),
+                    approved=review_in.status == ProjectJoinRequestStatus.APPROVED,
+                    notif_pref=requester.notif_join_request_reviewed,
+                ))
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to queue join_request_reviewed notification for %s", join_request_id, exc_info=True
+            )
 
     return _serialize_join_request(join_request)

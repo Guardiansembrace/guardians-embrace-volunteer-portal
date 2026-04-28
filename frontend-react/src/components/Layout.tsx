@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../lib/useAuth';
 import { LogOut, LayoutDashboard, FileText, Briefcase, Shield, ChevronDown, User as UserIcon, Check, X } from 'lucide-react';
 import { Logo } from './Logo';
+import { NotificationBell } from './NotificationBell';
 
 export function Navbar() {
     const { user, isAdmin, isTeamLead, canAccessAdminPortal, isDelegatedAdmin, logout, setName } = useAuth();
@@ -236,7 +237,7 @@ export function Navbar() {
                         )}
                     </div>
 
-                    <div />
+                    <NotificationBell />
                 </div>
             </nav>
         </header>

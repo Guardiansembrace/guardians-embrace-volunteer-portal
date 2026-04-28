@@ -245,6 +245,9 @@ async def admin_update_user(
                 detail="Only full admins can assign or modify the administrator role",
             )
 
+    old_role = user.role
+    old_is_active = user.is_active
+
     if update.name is not None:
         user.name = update.name
     if update.team is not None:
@@ -253,7 +256,31 @@ async def admin_update_user(
         user.role = update.role
     if update.is_active is not None:
         user.is_active = update.is_active
-    
+
     await user.save()
-    
+
+    try:
+        from app.core.notifications import notify_role_changed, notify_account_status_changed
+        import asyncio
+        if update.role is not None and update.role != old_role:
+            asyncio.create_task(notify_role_changed(
+                user_id=str(user.id),
+                user_name=user.name,
+                user_email=user.email,
+                old_role=old_role.value,
+                new_role=update.role.value,
+                notif_pref=True,
+            ))
+        if update.is_active is not None and update.is_active != old_is_active:
+            asyncio.create_task(notify_account_status_changed(
+                user_id=str(user.id),
+                user_name=user.name,
+                user_email=user.email,
+                activated=update.is_active,
+                notif_pref=True,
+            ))
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("Failed to queue user update notification", exc_info=True)
+
     return await build_user_response(user)

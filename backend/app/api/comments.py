@@ -161,7 +161,32 @@ async def create_comment(
     )
     
     await comment.insert()
-    
+
+    # Notify submission owner when an admin/team lead comments on their submission
+    is_admin_commenter = can_moderate_submission_comments(current_user)
+    is_own_submission = str(current_user.id) == submission.user_id
+    if is_admin_commenter and not is_own_submission:
+        try:
+            owner = await User.get(ObjectId(submission.user_id))
+            if owner:
+                from app.core.notifications import notify_admin_comment
+                import asyncio
+                asyncio.create_task(notify_admin_comment(
+                    submission_user_id=submission.user_id,
+                    submission_user_name=owner.name,
+                    submission_user_email=owner.email,
+                    commenter_name=current_user.name,
+                    week_id=submission.week_id,
+                    submission_id=submission_id,
+                    comment_preview=data.content,
+                    notif_pref=owner.notif_admin_comment,
+                ))
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to queue admin_comment notification for submission %s", submission_id, exc_info=True
+            )
+
     return comment_to_response(comment)
 
 

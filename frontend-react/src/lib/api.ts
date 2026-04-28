@@ -184,6 +184,31 @@ export interface WeekInfo {
     submission_id?: string;
 }
 
+export type NotificationType =
+    | 'submission_reviewed'
+    | 'admin_comment'
+    | 'join_request_reviewed'
+    | 'join_request_received'
+    | 'project_activity';
+
+export interface AppNotification {
+    id: string;
+    type: NotificationType;
+    title: string;
+    body: string;
+    link?: string;
+    read: boolean;
+    created_at: string;
+}
+
+export interface NotificationPreferences {
+    notif_submission_reviewed: boolean;
+    notif_admin_comment: boolean;
+    notif_join_request_reviewed: boolean;
+    notif_join_request_received: boolean;
+    notif_project_activity: boolean;
+}
+
 export interface SelectableSubmissionWeek {
     week_id: string;
     week_start: string;
@@ -1179,6 +1204,32 @@ export class ApiClient {
         if (params?.is_delegated !== undefined) queryParams.append('is_delegated', String(params.is_delegated));
         const qs = queryParams.toString();
         return this.cachedGet<AuditLogEntry[]>(`/admin-access/audit-logs${qs ? `?${qs}` : ''}`, SHORT_LIVED_CACHE_TTL_MS);
+    }
+
+    // -------------------------------------------------------------------------
+    // Notifications
+    // -------------------------------------------------------------------------
+
+    async getNotifications(limit = 30): Promise<{ notifications: AppNotification[]; unread_count: number }> {
+        return this.request<{ notifications: AppNotification[]; unread_count: number }>(
+            `/notifications?limit=${limit}`
+        );
+    }
+
+    async markNotificationRead(notificationId: string): Promise<AppNotification> {
+        return this.request<AppNotification>(`/notifications/${notificationId}/read`, { method: 'PATCH' });
+    }
+
+    async markAllNotificationsRead(): Promise<void> {
+        await this.request<void>('/notifications/read-all', { method: 'POST' });
+    }
+
+    async updateNotificationPreferences(prefs: Partial<NotificationPreferences>): Promise<void> {
+        await this.request<void>('/notifications/preferences', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(prefs),
+        });
     }
 
 }

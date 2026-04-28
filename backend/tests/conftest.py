@@ -11,12 +11,14 @@ from app.models.user import User, UserRole
 from app.models.submission import Submission, WorkEntry
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 def event_loop():
-    """Create event loop for async tests."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
+    """Create a fresh event loop per async test to prevent cross-test interference."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     yield loop
     loop.close()
+    asyncio.set_event_loop(None)
 
 
 @pytest.fixture

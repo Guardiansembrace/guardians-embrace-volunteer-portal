@@ -267,6 +267,27 @@ async def create_project_work_item(
     )
     _apply_assignees(work_item, assignees)
     await work_item.create()
+
+    # Notify assignees (skip if they assigned themselves)
+    try:
+        from app.core.notifications import notify_work_item_assigned
+        import asyncio
+        for assignee in assignees:
+            if str(assignee.id) != str(current_user.id):
+                asyncio.create_task(notify_work_item_assigned(
+                    user_id=str(assignee.id),
+                    user_name=assignee.name,
+                    user_email=assignee.email,
+                    work_item_title=work_item_in.title,
+                    project_name=project.name,
+                    project_id=project_id,
+                    assigned_by_name=current_user.name,
+                    notif_pref=assignee.notif_project_activity,
+                ))
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("Failed to queue work_item_assigned notification", exc_info=True)
+
     return _serialize_work_item(work_item)
 
 
@@ -313,6 +334,7 @@ async def update_project_work_item(
         ):
             raise HTTPException(status_code=403, detail="Work item edit access required")
 
+    newly_assigned_users: list = []
     if has_assignee_update:
         if requested_assignee_ids != current_assignee_ids:
             if not is_self_join and not can_assign_project_work(
@@ -323,6 +345,10 @@ async def update_project_work_item(
                 raise HTTPException(status_code=403, detail="Project assignment access required")
             assignees = await _resolve_assignees(project, requested_assignee_ids)
             _apply_assignees(work_item, assignees)
+            newly_assigned_users = [
+                a for a in assignees
+                if str(a.id) not in current_assignee_ids and str(a.id) != str(current_user.id)
+            ]
 
     for field_name, field_value in update_data.items():
         setattr(work_item, field_name, field_value)
@@ -331,6 +357,25 @@ async def update_project_work_item(
     work_item.updated_by_name = current_user.name
     work_item.updated_at = utc_now()
     await work_item.save()
+
+    if newly_assigned_users:
+        try:
+            from app.core.notifications import notify_work_item_assigned
+            import asyncio
+            for assignee in newly_assigned_users:
+                asyncio.create_task(notify_work_item_assigned(
+                    user_id=str(assignee.id),
+                    user_name=assignee.name,
+                    user_email=assignee.email,
+                    work_item_title=work_item.title,
+                    project_name=project.name,
+                    project_id=project_id,
+                    assigned_by_name=current_user.name,
+                    notif_pref=assignee.notif_project_activity,
+                ))
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning("Failed to queue work_item_assigned notification on update", exc_info=True)
 
     return _serialize_work_item(work_item)
 

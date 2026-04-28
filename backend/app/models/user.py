@@ -82,7 +82,14 @@ class User(Document, UserBase):
     
     # Google OAuth token for Drive uploads (refreshed on each login)
     google_access_token: Optional[str] = None
-    
+
+    # Notification preferences
+    notif_submission_reviewed: bool = True
+    notif_admin_comment: bool = True
+    notif_join_request_reviewed: bool = True
+    notif_join_request_received: bool = True
+    notif_project_activity: bool = False
+
     class Settings:
         name = "users"
         use_state_management = True
@@ -156,5 +163,10 @@ class UserResponse(BaseModel):
     admin_access: AdminAccessSummary = Field(default_factory=AdminAccessSummary)
     created_at: datetime
     last_login: Optional[datetime] = None
-    
+    notif_submission_reviewed: bool = True
+    notif_admin_comment: bool = True
+    notif_join_request_reviewed: bool = True
+    notif_join_request_received: bool = True
+    notif_project_activity: bool = False
+
     model_config = ConfigDict(from_attributes=True)

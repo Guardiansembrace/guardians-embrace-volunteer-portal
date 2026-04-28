@@ -46,11 +46,13 @@ class Database:
         from app.models.audit_log import AuditLog
         from app.models.allowed_email import AllowedEmail
         from app.models.settings import AdminSettings
-        
+        from app.models.notification import Notification
+
         # Initialize Beanie with all document models
         await init_beanie(
             database=self.database,
             document_models=[
+                Notification,
                 User,
                 Submission,
                 Comment,
