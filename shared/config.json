@@ -1,0 +1,94 @@
+{
+  "project": {
+    "name": "Guardian's Embrace Volunteer Portal",
+    "version": "1.0.0",
+    "organization": "Guardian's Embrace"
+  },
+  "schedule": {
+    "weekly_update": {
+      "start_day": "friday",
+      "end_day": "sunday",
+      "timezone": "America/New_York"
+    }
+  },
+  "roles": {
+    "volunteer": {
+      "level": 1,
+      "permissions": [
+        "read_own",
+        "write_own"
+      ]
+    },
+    "team_lead": {
+      "level": 2,
+      "permissions": [
+        "read_own",
+        "write_own",
+        "read_team"
+      ]
+    },
+    "admin": {
+      "level": 10,
+      "permissions": [
+        "read_all",
+        "write_all",
+        "manage_users",
+        "export_data"
+      ]
+    }
+  },
+  "admins": [
+    "maxwell@guardiansembrace.org",
+    "ujwalv098@gmail.com"
+  ],
+  "design": {
+    "colors": {
+      "primary_gold": "#D4AF37",
+      "primary_gold_hover": "#C4A030",
+      "primary_gold_light": "#F5E6B8",
+      "dark_bg": "#222326",
+      "dark_surface": "#2d2d2d",
+      "maroon": "#8B1538",
+      "slate_blue": "#4A5568",
+      "text_primary": "#1a1a1a",
+      "text_secondary": "#334155",
+      "text_on_dark": "#FFFFFF",
+      "background": "#FFFFFF",
+      "border": "#E2E8F0",
+      "success": "#10B981",
+      "warning": "#F59E0B",
+      "error": "#EF4444"
+    },
+    "typography": {
+      "heading_font": "Montserrat",
+      "body_font": "Inter",
+      "heading_weight": 700,
+      "body_weight": 400
+    },
+    "spacing": {
+      "border_radius": "3px",
+      "border_radius_lg": "8px"
+    }
+  },
+  "work_categories": [
+    "Outreach",
+    "Admin",
+    "Events",
+    "Tech",
+    "Fundraising",
+    "Training",
+    "Social Media",
+    "Research",
+    "Mentoring",
+    "Other"
+  ],
+  "features": {
+    "hours_tracking": true,
+    "google_drive_links": true,
+    "comments_replies": true,
+    "email_reminders": true,
+    "goal_tracking": false,
+    "project_tags": true,
+    "recognition_kudos": false
+  }
+}

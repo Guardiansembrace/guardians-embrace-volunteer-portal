@@ -1,0 +1,149 @@
+# =============================================================================
+# Guardian's Embrace Volunteer Portal — .gitignore
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Environment Files (CRITICAL — never commit secrets!)
+# -----------------------------------------------------------------------------
+.env
+.env.local
+.env*.local
+*.env
+*.env.aws
+!.env.example
+!.env.aws.example
+
+# -----------------------------------------------------------------------------
+# Credentials & Secrets (CRITICAL)
+# -----------------------------------------------------------------------------
+service-account.json
+SERVICE-ACCOUNT.JSON
+oauth_credentials.json
+OAUTH_URL.txt
+*.pem
+*.key
+*.crt
+*.p12
+secrets/
+
+# -----------------------------------------------------------------------------
+# Token helper scripts (contain personal emails / credential logic)
+# -----------------------------------------------------------------------------
+backend/get_token*.py
+backend/get_personal_account_token.py
+backend/get_refresh_token.py
+backend/exchange_code_for_token.py
+backend/oauth_url.py
+backend/GET_PERSONAL_TOKEN.md
+
+# -----------------------------------------------------------------------------
+# Python
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+ENV/
+
+# Agent / QMD dev tools
+.agent/
+qmd.ps1
+.eggs/
+*.egg-info/
+*.egg
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+pip-log.txt
+
+# -----------------------------------------------------------------------------
+# Node.js / JavaScript
+# -----------------------------------------------------------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.npm/
+
+# -----------------------------------------------------------------------------
+# Build Outputs
+# -----------------------------------------------------------------------------
+dist/
+build/
+out/
+.next/
+.nuxt/
+.cache/
+*.tsbuildinfo
+
+# -----------------------------------------------------------------------------
+# IDE / Editors
+# -----------------------------------------------------------------------------
+.idea/
+.vscode/*
+!.vscode/mcp.json
+*.swp
+*.swo
+*~
+*.sublime-workspace
+*.sublime-project
+
+# -----------------------------------------------------------------------------
+# Operating System
+# -----------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# -----------------------------------------------------------------------------
+# Logs, Uploads & Debug
+# -----------------------------------------------------------------------------
+*.log
+logs/
+backend/logs/
+backend/uploads/
+*.debug
+
+# -----------------------------------------------------------------------------
+# Testing & Coverage
+# -----------------------------------------------------------------------------
+coverage/
+*.lcov
+.nyc_output/
+
+# -----------------------------------------------------------------------------
+# Ad-hoc test scripts at backend root
+# -----------------------------------------------------------------------------
+backend/test_drive.py
+backend/test_drive_config.py
+backend/test_upload_flow.py
+test_upload.py
+
+# -----------------------------------------------------------------------------
+# Deployment
+# -----------------------------------------------------------------------------
+.vercel
+.netlify
+.serverless
+.deployment/
+
+# -----------------------------------------------------------------------------
+# Misc
+# -----------------------------------------------------------------------------
+*.bak
+*.tmp
+*.temp
+
+# Dev notes (keep docs/ folder instead)
+DRIVE_ISSUES_FIXED.md
+IMPLEMENTATION_SUMMARY.md
+SHARED_DRIVE_SETUP.md
+FEATURE_AUDIT.md
