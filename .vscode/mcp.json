@@ -1,0 +1,12 @@
+{
+  "servers": {
+    "qmd": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "C:\\Users\\ujwal\\AppData\\Roaming\\npm\\node_modules\\@tobilu\\qmd\\dist\\qmd.js",
+        "mcp"
+      ]
+    }
+  }
+}

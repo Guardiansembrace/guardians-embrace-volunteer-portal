@@ -1,0 +1,182 @@
+<mxfile host="app.diagrams.net" modified="2026-04-10T00:00:00.000Z" version="21.0.0">
+  <diagram id="project-journey-flow" name="Project Journey Flow">
+    <mxGraphModel dx="1422" dy="762" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1654" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Title -->
+        <mxCell id="2" value="Guardian&#39;s Embrace Volunteer Portal — Project Journey" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=20;fontStyle=1;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="100" y="30" width="1300" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Subtitle -->
+        <mxCell id="3" value="From Vision to Live Production — 5 Phases" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=13;fontStyle=2;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="100" y="75" width="1300" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- START oval -->
+        <mxCell id="10" value="&lt;b&gt;Vision&lt;/b&gt;" style="ellipse;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="200" width="110" height="55" as="geometry" />
+        </mxCell>
+
+        <!-- Phase 1 box -->
+        <mxCell id="20" value="&lt;b&gt;Phase 1&lt;/b&gt;&lt;br&gt;Foundation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="200" y="185" width="185" height="85" as="geometry" />
+        </mxCell>
+
+        <!-- Phase 2 box -->
+        <mxCell id="21" value="&lt;b&gt;Phase 2&lt;/b&gt;&lt;br&gt;Core Features" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="445" y="185" width="185" height="85" as="geometry" />
+        </mxCell>
+
+        <!-- Phase 3 box -->
+        <mxCell id="22" value="&lt;b&gt;Phase 3&lt;/b&gt;&lt;br&gt;UX, Quality &amp;amp; Accessibility" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="690" y="185" width="185" height="85" as="geometry" />
+        </mxCell>
+
+        <!-- Phase 4 box -->
+        <mxCell id="23" value="&lt;b&gt;Phase 4&lt;/b&gt;&lt;br&gt;Collaboration" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="935" y="185" width="185" height="85" as="geometry" />
+        </mxCell>
+
+        <!-- Phase 5 box -->
+        <mxCell id="24" value="&lt;b&gt;Phase 5&lt;/b&gt;&lt;br&gt;AWS Deployment" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1180" y="185" width="185" height="85" as="geometry" />
+        </mxCell>
+
+        <!-- END oval -->
+        <mxCell id="11" value="&lt;b&gt;Live Portal&lt;/b&gt;" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontColor=#006600;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1420" y="200" width="110" height="55" as="geometry" />
+        </mxCell>
+
+        <!-- Horizontal arrows -->
+        <mxCell id="30" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" source="10" target="20" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="31" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" source="20" target="21" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="32" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" source="21" target="22" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="33" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" source="22" target="23" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="34" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" source="23" target="24" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="35" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" source="24" target="11" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Output boxes below each phase -->
+        <mxCell id="40" value="Working Login&lt;br&gt;+ Weekly Submissions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="200" y="320" width="185" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="41" value="Full-Featured Portal&lt;br&gt;for Volunteers + Admins" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="445" y="320" width="185" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="42" value="Polished, Tested&lt;br&gt;&amp;amp; Accessible App" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="690" y="320" width="185" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="43" value="Team-Based Projects&lt;br&gt;Inside the Portal" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d6b656;fontSize=10;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="935" y="320" width="185" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="44" value="Live Production&lt;br&gt;Environment on AWS" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="1180" y="320" width="185" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Arrows from phase to output -->
+        <mxCell id="50" value="" style="edgeStyle=orthogonalEdgeStyle;" edge="1" source="20" target="40" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="51" value="" style="edgeStyle=orthogonalEdgeStyle;" edge="1" source="21" target="41" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="52" value="" style="edgeStyle=orthogonalEdgeStyle;" edge="1" source="22" target="42" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="53" value="" style="edgeStyle=orthogonalEdgeStyle;" edge="1" source="23" target="43" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="54" value="" style="edgeStyle=orthogonalEdgeStyle;" edge="1" source="24" target="44" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Key activities rows (below output boxes) -->
+        <mxCell id="60" value="Auth · Database&lt;br&gt;Roles · Submit Form" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#d6b656;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="200" y="420" width="185" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="61" value="Admin Panel · Files&lt;br&gt;Email · Streaks · Heatmap" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#d6b656;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="445" y="420" width="185" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="62" value="Autosave · Accessibility&lt;br&gt;Tests · Monitoring · Lint" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#d6b656;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="690" y="420" width="185" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="63" value="Projects · Work Items&lt;br&gt;Join Requests · Delegated Access" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#d6b656;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="935" y="420" width="185" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="64" value="Lambda · CloudFront · S3&lt;br&gt;API Gateway · CI/CD" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#d6b656;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="1180" y="420" width="185" height="55" as="geometry" />
+        </mxCell>
+
+        <!-- Arrows output to activity -->
+        <mxCell id="70" value="" style="edgeStyle=orthogonalEdgeStyle;" edge="1" source="40" target="60" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="71" value="" style="edgeStyle=orthogonalEdgeStyle;" edge="1" source="41" target="61" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="72" value="" style="edgeStyle=orthogonalEdgeStyle;" edge="1" source="42" target="62" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="73" value="" style="edgeStyle=orthogonalEdgeStyle;" edge="1" source="43" target="63" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="74" value="" style="edgeStyle=orthogonalEdgeStyle;" edge="1" source="44" target="64" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Feedback loop label -->
+        <mxCell id="80" value="Continuous Improvement: Guided by volunteer feedback, admin input, and prayerful discernment" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontStyle=2;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="200" y="510" width="1165" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- Feedback loop arrow (dashed, from Live Portal back to Phase 2) -->
+        <mxCell id="81" value="Feedback Loop" style="edgeStyle=orthogonalEdgeStyle;dashed=1;dashPattern=8 4;endArrow=open;endFill=0;fontSize=9;fontColor=#666666;strokeColor=#999999;" edge="1" source="11" target="21" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1475" y="545" />
+              <mxPoint x="537" y="545" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Current status and next-step section -->
+        <mxCell id="90" value="Current Status + Next To Do" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontStyle=1;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="200" y="585" width="1165" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="91" value="&lt;b&gt;Current Delivery Focus&lt;/b&gt;&lt;br&gt;Phase 4 collaboration features are in progress.&lt;br&gt;Phase 5 AWS deployment and S3 migration are in progress.&lt;br&gt;CI/CD is in progress and the custom domain is still pending." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="210" y="625" width="410" height="95" as="geometry" />
+        </mxCell>
+        <mxCell id="92" value="&lt;b&gt;Immediate Next Steps&lt;/b&gt;&lt;br&gt;1. Finish project and work-item collaboration.&lt;br&gt;2. Move uploads and public assets to S3.&lt;br&gt;3. Validate the AWS test deploy end-to-end.&lt;br&gt;4. Add GitHub Actions CI/CD deploy flow.&lt;br&gt;5. Production hardening and go-live.&lt;br&gt;6. Start the next collaboration package: suggestions, notifications, and handoff workflows." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="655" y="625" width="520" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="93" value="" style="edgeStyle=orthogonalEdgeStyle;dashed=1;dashPattern=6 4;strokeColor=#d6b656;endArrow=open;endFill=0;" edge="1" source="63" target="91" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="94" value="" style="edgeStyle=orthogonalEdgeStyle;dashed=1;dashPattern=6 4;strokeColor=#b85450;endArrow=open;endFill=0;" edge="1" source="64" target="92" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="95" value="&lt;b&gt;Future Collaboration Roadmap&lt;/b&gt;&lt;br&gt;Suggestions + feedback intake â€¢ project-interest and portal-contributor notifications â€¢ handoff notes/checklists/history â€¢ shadow leads and leadership rotation â€¢ workflow benchmarking from Monday, ClickUp, Jira, Pipedrive, Miro, Asana, Trello, Linear, and Plane â€¢ kept simple, role-aware, and low-noise." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8f8e8;strokeColor=#82b366;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="210" y="740" width="965" height="75" as="geometry" />
+        </mxCell>
+        <mxCell id="96" value="" style="edgeStyle=orthogonalEdgeStyle;dashed=1;dashPattern=6 4;strokeColor=#82b366;endArrow=open;endFill=0;" edge="1" source="63" target="95" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Guardian's Embrace - Security Architecture & Data Flow</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-dark: #1e40af;
+            --bg: #f8fafc;
+            --surface: #ffffff;
+            --text: #0f172a;
+            --text-light: #64748b;
+            --border: #e2e8f0;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+        }
+
+        * { box-sizing: border-box; }
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            line-height: 1.6;
+            color: var(--text);
+            background: var(--bg);
+            margin: 0;
+            padding: 40px 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: var(--surface);
+            padding: 60px;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.05);
+            border: 1px solid var(--border);
+        }
+
+        header {
+            border-bottom: 2px solid var(--primary);
+            margin-bottom: 40px;
+            padding-bottom: 20px;
+        }
+
+        h1 { margin: 0; font-size: 2.5rem; color: var(--text); font-weight: 700; }
+        h2 { font-size: 1.75rem; color: var(--primary-dark); margin-top: 40px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+        h3 { font-size: 1.25rem; margin-top: 25px; color: var(--text); }
+
+        .meta {
+            color: var(--text-light);
+            font-size: 0.9rem;
+            margin-top: 10px;
+            display: flex;
+            gap: 20px;
+        }
+
+        p { margin-bottom: 1.5rem; }
+
+        .diagram-container {
+            background: #f1f5f9;
+            padding: 30px;
+            border-radius: 8px;
+            margin: 30px 0;
+            text-align: center;
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 12px 15px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        th {
+            background: #f8fafc;
+            font-weight: 600;
+            color: var(--primary-dark);
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .badge-secure { background: #dcfce7; color: #166534; }
+        .badge-info { background: #dbeafe; color: #1e40af; }
+
+        code {
+            font-family: 'JetBrains Mono', monospace;
+            background: #f1f5f9;
+            padding: 2px 4px;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+
+        .alert {
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 4px solid;
+            margin: 20px 0;
+        }
+        .alert-note { background: #eff6ff; border-left-color: var(--primary); }
+
+        @media print {
+            body { background: white; padding: 0; }
+            .container { box-shadow: none; border: none; width: 100%; max-width: 100%; padding: 0; }
+            .diagram-container { page-break-inside: avoid; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>Data Flow & Security Architecture</h1>
+        <div class="meta">
+            <span><strong>Project:</strong> Guardian's Embrace Volunteer Portal</span>
+            <span><strong>Status:</strong> Release Candidate 1.0</span>
+            <span><strong>Date:</strong> March 2026</span>
+        </div>
+    </header>
+
+    <section>
+        <h2>1. Executive Summary</h2>
+        <p>
+            The Guardian's Embrace Volunteer Portal is a decoupled web application designed to facilitate volunteer contributions while maintaining high standards for data integrity and organizational security. This document outlines the technical architecture, data flow paths, and security controls implemented to protect volunteer identity and organizational assets.
+        </p>
+    </section>
+
+    <section>
+        <h2>2. High-Level Architecture</h2>
+        <p>The system utilizes a modern stack optimized for security and scalability:</p>
+        <ul>
+            <li><strong>Frontend:</strong> React 18 / TypeScript / Vite.</li>
+            <li><strong>Backend:</strong> FastAPI (Python 3.12) REST API.</li>
+            <li><strong>Database:</strong> MongoDB (NoSQL) for metadata and state.</li>
+            <li><strong>Storage:</strong> Google Drive API (Shared Drive via Service Account).</li>
+            <li><strong>Identity:</strong> Google OAuth 2.0 (OIDC).</li>
+        </ul>
+
+        <h3>2.1 System Interconnectivity</h3>
+        <div class="diagram-container">
+            <div class="mermaid">
+                graph TD
+                subgraph Clients
+                Volunteer[Volunteer Browser]
+                Admin[Admin Dashboard]
+                end
+
+                subgraph "Cloud Services"
+                FastAPI[FastAPI Backend - TLS 1.3]
+                Mongo[(MongoDB Atlas)]
+                GDrive[Google Shared Drive]
+                end
+
+                subgraph "Auth Provider"
+                GoogleIDP[Google OAuth 2.0]
+                end
+
+                Volunteer <-->|HTTPS/JWT| FastAPI
+                Admin <-->|HTTPS/JWT| FastAPI
+                FastAPI <-->|Wire Protocol/TLS| Mongo
+                FastAPI <-->|Server-to-Server Oauth| GDrive
+                Volunteer ---|SSO Redirect| GoogleIDP
+                FastAPI ---|Token Exchange| GoogleIDP
+            </div>
+        </div>
+    </section>
+
+    <section>
+        <h2>3. Data Flow Analysis</h2>
+
+        <h3>3.1 Authentication Strategy (OIDC)</h3>
+        <p>
+            The portal employs a <strong>passwordless architecture</strong>. We do not store or process raw credentials.
+        </p>
+        <ol>
+            <li>User initiates login via Google SSO on the frontend.</li>
+            <li>Google returns an <code>id_token</code> / <code>access_token</code> to the client.</li>
+            <li>Frontend transmits the token to the backend <code>/auth/google</code> endpoint.</li>
+            <li>Backend verifies the token integrity directly with Google API.</li>
+            <li>Upon successful validation, backend issues a short-lived, signed <strong>JWT (JSON Web Token)</strong>.</li>
+        </ol>
+
+        <h3>3.2 Secure File Ingestion</h3>
+        <p>
+            Volunteer submissions are handled via a proxied streaming mechanism:
+        </p>
+        <table>
+            <thead>
+                <tr>
+                    <th>Flow Stage</th>
+                    <th>Action</th>
+                    <th>Security Control</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Ingress</td>
+                    <td>Volunteer uploads work snapshot (max 25MB)</td>
+                    <td>MIME type checking & size limits</td>
+                </tr>
+                <tr>
+                    <td>Processing</td>
+                    <td>Backend validates user Role and Project scope</td>
+                    <td>RBAC (Role Based Access Control)</td>
+                </tr>
+                <tr>
+                    <td>Storage</td>
+                    <td>File streamed to Google Shared Drive via Service Account</td>
+                    <td>Encryption at rest (AES-256)</td>
+                </tr>
+                <tr>
+                    <td>Cleanup</td>
+                    <td>No permanent local file storage on the API server</td>
+                    <td>Disk sanitization policy</td>
+                </tr>
+            </tbody>
+        </table>
+    </section>
+
+    <section>
+        <h2>4. Data Classification & Privacy</h2>
+        <p>Understanding where sensitive data resides is critical for privacy compliance.</p>
+        <table>
+            <thead>
+                <tr>
+                    <th>Data Type</th>
+                    <th>Classification</th>
+                    <th>Location</th>
+                    <th>Retention</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Volunteer Identity</td>
+                    <td>PII (High)</td>
+                    <td>MongoDB / Google</td>
+                    <td>Account Duration</td>
+                </tr>
+                <tr>
+                    <td>Work Submissions</td>
+                    <td>Confidential</td>
+                    <td>MongoDB / Drive</td>
+                    <td>Project Lifecycle</td>
+                </tr>
+                <tr>
+                    <td>JWT Secrets</td>
+                    <td>Secret</td>
+                    <td>Env Vars</td>
+                    <td>Rotation Period</td>
+                </tr>
+            </tbody>
+        </table>
+    </section>
+
+    <section>
+        <h2>5. Identity & Access Management (IAM)</h2>
+        <h3>5.1 Principle of Least Privilege</h3>
+        <p>
+            The Google Service Account is configured as a <strong>Content Manager</strong> on the specific Shared Drive only. It has no access to the wider organization workspace (Email, Calendar, etc.).
+        </p>
+        <h3>5.2 Internal RBAC</h3>
+        <ul>
+            <li><strong>Volunteer:</strong> Limited to own data and submissions.</li>
+            <li><strong>Team Lead:</strong> Management access for assigned projects.</li>
+            <li><strong>Admin:</strong> System-wide configuration and user management.</li>
+        </ul>
+    </section>
+
+    <section>
+        <h2>6. API Threat Mitigation Map</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Threat</th>
+                    <th>Mitigation</th>
+                    <th>Implementation</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Injection</td>
+                    <td>Parameterized I/O</td>
+                    <td>Beanie ODM / Pydantic</td>
+                </tr>
+                <tr>
+                    <td>Broken Auth</td>
+                    <td>Delegated Auth</td>
+                    <td>Google OAuth 2.0</td>
+                </tr>
+                <tr>
+                    <td>Exposure</td>
+                    <td>DTO Clipping</td>
+                    <td>Explicit Response Models</td>
+                </tr>
+            </tbody>
+        </table>
+    </section>
+
+    <section>
+        <h2>7. Verification Evidence</h2>
+        <ul>
+            <li><strong>OpenAPI:</strong> Interactive Swagger UI at <code>/api/docs</code>.</li>
+            <li><strong>Audit Logs:</strong> Comprehensive tracing with Correlation IDs.</li>
+            <li><strong>Config:</strong> Clean <code>.env.example</code> validation.</li>
+        </ul>
+    </section>
+
+    <section>
+        <h2>8. Risk Mitigation & Resilience</h2>
+        <p>
+            The application features a <strong>Circuit Breaker</strong> for cloud storage; if Google Drive is unreachable, data is encrypted and cached locally until the service recovers, ensuring no data loss.
+        </p>
+    </section>
+
+    <section>
+        <h2>9. Security Control Matrix</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Domain</th>
+                    <th>Implementation Detail</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>Transport</strong></td>
+                    <td>TLS 1.2+ required for all endpoints.</td>
+                    <td><span class="badge badge-secure">Active</span></td>
+                </tr>
+                <tr>
+                    <td><strong>Access Control</strong></td>
+                    <td>JWT-based middleware with role hierarchies.</td>
+                    <td><span class="badge badge-secure">Active</span></td>
+                </tr>
+                <tr>
+                    <td><strong>Data Integrity</strong></td>
+                    <td>Pydantic models for strict I/O enforcement.</td>
+                    <td><span class="badge badge-secure">Active</span></td>
+                </tr>
+            </tbody>
+        </table>
+    </section>
+
+    <div class="alert alert-note">
+        <strong>Confidentiality Notice:</strong> This document contains architecture details intended for internal security review teams. Unauthorized distribution is prohibited.
+    </div>
+</div>
+
+<script>
+    mermaid.initialize({ startOnLoad: true, theme: 'neutral' });
+</script>
+
+</body>
+</html>

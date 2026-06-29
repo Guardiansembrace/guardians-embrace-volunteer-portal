@@ -1,0 +1,168 @@
+{
+  "info": {
+    "name": "Guardians Portal — Notifications",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8081/api/v1" },
+    { "key": "token", "value": "PASTE_YOUR_JWT_TOKEN_HERE" },
+    { "key": "submission_id", "value": "PASTE_SUBMISSION_ID_HERE" },
+    { "key": "project_id", "value": "PASTE_PROJECT_ID_HERE" },
+    { "key": "join_request_id", "value": "PASTE_JOIN_REQUEST_ID_HERE" },
+    { "key": "notification_id", "value": "PASTE_NOTIFICATION_ID_HERE" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }]
+  },
+  "item": [
+    {
+      "name": "1. Get My Notifications",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/notifications?limit=30",
+          "host": ["{{base_url}}"],
+          "path": ["notifications"],
+          "query": [{ "key": "limit", "value": "30" }]
+        },
+        "description": "Returns recent notifications and unread count for the logged-in user."
+      }
+    },
+    {
+      "name": "2. Mark One Notification Read",
+      "request": {
+        "method": "PATCH",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/notifications/{{notification_id}}/read",
+          "host": ["{{base_url}}"],
+          "path": ["notifications", "{{notification_id}}", "read"]
+        },
+        "description": "Mark a single notification as read. Get the notification_id from the Get Notifications response."
+      }
+    },
+    {
+      "name": "3. Mark All Notifications Read",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/notifications/read-all",
+          "host": ["{{base_url}}"],
+          "path": ["notifications", "read-all"]
+        },
+        "description": "Mark all of the current user's notifications as read."
+      }
+    },
+    {
+      "name": "4. Update Notification Preferences",
+      "request": {
+        "method": "PATCH",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"notif_submission_reviewed\": true,\n  \"notif_admin_comment\": true,\n  \"notif_join_request_reviewed\": true,\n  \"notif_join_request_received\": true,\n  \"notif_project_activity\": false\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/notifications/preferences",
+          "host": ["{{base_url}}"],
+          "path": ["notifications", "preferences"]
+        },
+        "description": "Update which notification types the current user receives. All fields are optional — only send the ones you want to change."
+      }
+    },
+    {
+      "name": "--- TRIGGERS ---",
+      "item": [
+        {
+          "name": "5. Trigger: Review a Submission (admin only)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"admin_notes\": \"Great work this week! Hours look accurate.\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/submissions/{{submission_id}}/review",
+              "host": ["{{base_url}}"],
+              "path": ["submissions", "{{submission_id}}", "review"]
+            },
+            "description": "Marks a submission as reviewed. The volunteer who submitted will receive an in-app notification and email (if SMTP configured).\n\nRequires: admin or operations token.\nSet submission_id to a submitted (not draft) submission."
+          }
+        },
+        {
+          "name": "6. Trigger: Admin Comments on Submission",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"Can you clarify the hours logged on Tuesday?\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/comments/submission/{{submission_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["comments", "submission", "{{submission_id}}"]
+            },
+            "description": "Adds a comment as an admin/team lead. The submission owner gets an in-app notification and email.\n\nNote: No notification is sent if the commenter IS the submission owner, or if the commenter is a regular volunteer."
+          }
+        },
+        {
+          "name": "7. Trigger: Create a Join Request (volunteer)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"request_type\": \"access\",\n  \"message\": \"I would like to help with this project.\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/projects/{{project_id}}/join-requests",
+              "host": ["{{base_url}}"],
+              "path": ["projects", "{{project_id}}", "join-requests"]
+            },
+            "description": "Submits a join request as a volunteer. The project lead and all admins receive an in-app notification and email.\n\nrequest_type options: access | lead | delete"
+          }
+        },
+        {
+          "name": "8. Trigger: Approve or Decline Join Request (admin)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"approved\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/projects/{{project_id}}/join-requests/{{join_request_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["projects", "{{project_id}}", "join-requests", "{{join_request_id}}"]
+            },
+            "description": "Approves or declines a join request. The requesting volunteer receives an in-app notification and email.\n\nstatus options: approved | declined"
+          }
+        }
+      ]
+    },
+    {
+      "name": "--- EMAIL STATUS ---",
+      "item": [
+        {
+          "name": "9. Check Email Config (admin only)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/notifications/email-status",
+              "host": ["{{base_url}}"],
+              "path": ["notifications", "email-status"]
+            },
+            "description": "Checks whether SMTP is configured and ready to send emails. Requires admin token."
+          }
+        }
+      ]
+    }
+  ]
+}
